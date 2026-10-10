@@ -3584,8 +3584,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/comments.rs::a_new_highlight_opens_the_floating_editor", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
+notes = "drag over text, or pick the tool with text selected; a new highlight opens its floating comment editor for typing; agents can highlight by text search"
 
 [[feature]]
 id = "comment.underline"

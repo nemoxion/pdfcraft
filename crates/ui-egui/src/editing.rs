@@ -138,13 +138,13 @@ impl PdfCraftApp {
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
-                        // A new highlight opens its note for typing straight away, as in Acrobat,
-                        // unless a note typed into another card is still unsaved.
+                        // A new highlight opens its floating editor straight away, unless text
+                        // typed into another comment is still unsaved.
                         if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
                             && a.contents.is_empty()
-                            && view.comments.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty())
+                            && let Some(annotation) = info.annotations.iter().find(|x| (x.page, x.index) == (a.page, n))
                         {
-                            view.comments.editing = Some((a.page, n, String::new()));
+                            view.comments.edit_comment(annotation);
                         }
                     }
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
