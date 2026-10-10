@@ -426,6 +426,11 @@ pub struct Document {
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
     editor: Option<Editor>,
     config: RenderConfig,
+    /// Display-only dark-page preference; independent of document history.
+    dark_pages: bool,
+    /// How dark pages are drawn: the palette, and whether images keep their colours (then the
+    /// renderer draws them, through `config.dark_reading`).
+    dark_style: pdfcraft_render::DarkPages,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
@@ -1092,6 +1097,18 @@ fn shown_under_redactions(
         return Err(RedactError::Residue(residue).into());
     }
     Ok(())
+}
+
+/// Dark pages that keep their images are drawn by the renderer: give it the palette's colour
+/// remapping, or take it away, rebuilding the renderer (and dropping cached rasters through the
+/// edit generation) only when that changes.
+fn apply_dark_reading(doc: &mut Document) {
+    let wanted = if doc.dark_pages && doc.dark_style.renderer_draws() { doc.dark_style.reading_colors() } else { ReadingColors::default() };
+    if doc.config.dark_reading != wanted {
+        doc.config.dark_reading = wanted;
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.generation += 1;
+    }
 }
 
 fn render_threads() -> usize {
@@ -3967,6 +3984,8 @@ impl Session {
             sig_cache,
             editor,
             config,
+            dark_pages: false,
+            dark_style: Default::default(),
             js_output: Default::default(),
             xfa,
             xfa_template: None,
@@ -4658,14 +4677,20 @@ impl Session {
         let at = self.docs.iter().position(|d| d.id == new_id).ok_or_else(|| OpenError::Invalid("the new version was not kept".into()))?;
         let mut doc = self.docs.remove(at);
         doc.id = id;
-        // How the document is shown is the reader's, not the file's: reading colours and hidden
-        // comments stay as they were (#3443). `open` built the renderer with the defaults.
-        if let Some(old) = self.docs.get(old)
-            && (doc.config.reading_colors != old.config.reading_colors || doc.config.hide_comments != old.config.hide_comments)
-        {
-            doc.config.reading_colors = old.config.reading_colors;
-            doc.config.hide_comments = old.config.hide_comments;
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        // How the document is shown is the reader's, not the file's: reading colours, hidden
+        // comments and dark pages stay as they were (#3443). `open` built the renderer with the
+        // defaults; dark pages that filter the finished pixels don't need it rebuilt.
+        if let Some(old) = self.docs.get(old) {
+            (doc.dark_pages, doc.dark_style) = (old.dark_pages, old.dark_style);
+            if doc.config.reading_colors != old.config.reading_colors
+                || doc.config.hide_comments != old.config.hide_comments
+                || doc.config.dark_reading != old.config.dark_reading
+            {
+                doc.config.reading_colors = old.config.reading_colors;
+                doc.config.hide_comments = old.config.hide_comments;
+                doc.config.dark_reading = old.config.dark_reading;
+                doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            }
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
         // one; there is nothing new to autosave.
@@ -5283,6 +5308,36 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
+    }
+
+    /// Set display-only dark pages. Does not change bytes or history. Explicit reading-colour
+    /// presets take precedence without resetting this preference. Returns whether it changed;
+    /// when the pages are drawn by the renderer (images kept), cached rasters must be dropped.
+    pub fn set_dark_pages(&mut self, id: DocId, enabled: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|doc| doc.id == id) else { return false };
+        let changed = doc.dark_pages != enabled;
+        doc.dark_pages = enabled;
+        apply_dark_reading(doc);
+        changed
+    }
+
+    /// Set how dark pages are drawn (palette, keep images). Returns whether it changed.
+    pub fn set_dark_style(&mut self, id: DocId, style: pdfcraft_render::DarkPages) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|doc| doc.id == id) else { return false };
+        let changed = doc.dark_style != style;
+        doc.dark_style = style;
+        apply_dark_reading(doc);
+        changed
+    }
+
+    /// The dark-page preference; `None` when no such document is open.
+    pub fn dark_pages(&self, id: DocId) -> Option<bool> {
+        Some(self.get(id)?.dark_pages)
+    }
+
+    /// How dark pages are drawn; `None` when no such document is open.
+    pub fn dark_style(&self, id: DocId) -> Option<pdfcraft_render::DarkPages> {
+        Some(self.get(id)?.dark_style)
     }
 
     /// The document's reading-colours setting; `None` when no such document is open.

@@ -68,6 +68,9 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// Dark PDF pages that keep their images ([`crate::DarkPages::reading_colors`]): the same
+    /// remapping, used while `reading_colors` is off (an explicit preset wins). Display only.
+    pub dark_reading: ReadingColors,
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
@@ -177,10 +180,16 @@ pub struct RenderRequest {
 /// printout, and the print itself — imposed from the document — is never recoloured.
 pub const PRINT_TAG: u64 = 1 << 60;
 
-/// The reading colours a request renders with: print previews ([`PRINT_TAG`]) ignore the
-/// document's setting and render with reading colours off.
+/// The reading colours a request renders with: the document's setting, else dark pages that keep
+/// their images. Print previews ([`PRINT_TAG`]) ignore both and render with them off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
-    if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+    if req.tag & PRINT_TAG != 0 {
+        ReadingColors::default()
+    } else if config.reading_colors.params.is_some() {
+        config.reading_colors
+    } else {
+        config.dark_reading
+    }
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -807,6 +816,11 @@ impl RenderPool {
     /// A pool without worker threads: renders inside `try_recv` (the web path; also used in tests).
     pub fn new_inline(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         Self::with_mode(bytes, 0, config, true)
+    }
+
+    /// The preset used by this pool, so display overlays can match its rendered pages.
+    pub fn reading_colors(&self) -> ReadingColors {
+        self.config.reading_colors
     }
 
     /// `true` when rendering happens on the caller's thread (no worker threads available).
@@ -6789,6 +6803,43 @@ trailer << /Root 1 0 R >>
     /// White-on-black: the page clears black, the black filled rectangle maps to the text colour,
     /// and the image's pixels are byte-identical to the plain render — photos never pass through
     /// the mapping, not even its white quadrant, which would map to black if they did.
+    /// Dark pages that keep opaque images (the default) recolour an image with transparency
+    /// (here a black image with a soft mask, as an image signature is) as ink, so it shows on the
+    /// dark paper, and keep an opaque image as it is; keeping all images keeps both.
+    #[test]
+    fn dark_pages_recolour_images_with_transparency_and_keep_opaque_ones() {
+        // Two black 2 x 2 images: /Im at the left is opaque, /Sig at the right has a soft mask.
+        let content = "q 20 0 0 20 10 15 cm /Im Do Q q 20 0 0 20 60 15 cm /Sig Do Q";
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Sig 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 25 >> stream\n000000000000000000000000>\nendstream endobj\n\
+             6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 7 0 R /Filter /ASCIIHexDecode /Length 25 >> stream\n000000000000000000000000>\nendstream endobj\n\
+             7 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 9 >> stream\nFFFFFFFF>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let render = |images| {
+            let dark_reading = crate::DarkPages { palette: crate::DarkPalette::Black, images }.reading_colors();
+            let mut r = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig { dark_reading, ..Default::default() });
+            let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let pixel = |page: &RenderedPage, x: u32, y: u32| -> [u8; 4] { page.rgba[((y * page.width + x) * 4) as usize..][..4].try_into().unwrap() };
+        // Device pixels at scale 2: /Im covers 20..60 x 30..70, /Sig 120..160 x 30..70.
+        let opaque = render(crate::DarkImages::KeepOpaque);
+        assert_eq!(pixel(&opaque, 5, 5), [0, 0, 0, 255], "the black palette's paper");
+        assert_eq!(pixel(&opaque, 40, 50), [0, 0, 0, 255], "the opaque image keeps its black");
+        assert_eq!(pixel(&opaque, 140, 50), [255, 255, 255, 255], "the image with transparency becomes the palette's ink");
+        let all = render(crate::DarkImages::KeepAll);
+        assert_eq!((pixel(&all, 40, 50), pixel(&all, 140, 50)), ([0, 0, 0, 255], [0, 0, 0, 255]), "keeping all images keeps both");
+    }
+
     #[test]
     fn reading_colors_map_solid_paints_and_leave_images() {
         let content = "0 0 0 rg 10 10 30 20 re f\nq 20 0 0 10 60 20 cm /Im Do Q";
@@ -6830,6 +6881,45 @@ trailer << /Root 1 0 R >>
             }
         }
         assert_eq!(pixel(&on, 150, 55), &[255, 255, 255, 255], "the image's white quadrant stays white");
+
+        // Dark pages that keep their images: the same remapping in the palette's colours, the
+        // image untouched; an explicit preset wins over it, and print previews use neither.
+        let palette = crate::DarkPalette::Sepia;
+        let dark_reading = crate::DarkPages { palette, images: crate::DarkImages::KeepOpaque }.reading_colors();
+        let render_with = |config: RenderConfig, tag: u64| {
+            let page = PageRenderer::new(Arc::new(pdf.clone()), config).render(RenderRequest { tag, ..req });
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let dark = render_with(RenderConfig { dark_reading, ..Default::default() }, 0);
+        let [pr, pg, pb] = palette.paper();
+        let [ir, ig, ib] = palette.ink();
+        assert_eq!(pixel(&dark, 5, 5), &[pr, pg, pb, 255], "the page clears to the palette's paper");
+        assert_eq!(pixel(&dark, 50, 60), &[ir, ig, ib, 255], "black paint becomes the palette's ink");
+        for y in 44..56u32 {
+            for x in 124..156u32 {
+                assert_eq!(pixel(&dark, x, y), pixel(&off, x, y), "image pixel {x},{y} is kept");
+            }
+        }
+        // Coloured paint keeps its hue (the palette's dark page filter), where reading colours
+        // map it by luminance to grey.
+        let red_pdf = pdf.clone().into_iter().collect::<Vec<u8>>();
+        let red_pdf = String::from_utf8(red_pdf).unwrap().replacen("0 0 0 rg 10 10 30 20 re f", "1 0 0 rg 10 10 30 20 re f", 1).into_bytes();
+        let red = |config: RenderConfig| {
+            let page = PageRenderer::new(Arc::new(red_pdf.clone()), config).render(req);
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let kept = red(RenderConfig { dark_reading, ..Default::default() });
+        let [r, g, b, _] = <[u8; 4]>::try_from(pixel(&kept, 50, 60)).unwrap();
+        assert!(r > g + 40 && r > b + 40, "the red rectangle stays red: {r} {g} {b}");
+        let greyed = red(RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, ..Default::default() });
+        let [r, g, b, _] = <[u8; 4]>::try_from(pixel(&greyed, 50, 60)).unwrap();
+        assert!(r == g && g == b, "a reading preset maps it to grey: {r} {g} {b}");
+        let both = render_with(RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, dark_reading, ..Default::default() }, 0);
+        assert_eq!(both.rgba, on.rgba, "an explicit preset wins over dark pages");
+        let printed = render_with(RenderConfig { dark_reading, ..Default::default() }, PRINT_TAG);
+        assert_eq!(printed.rgba, off.rgba, "print previews keep the original colours");
     }
 
     /// #2975: a stencil mask (`/ImageMask true`) is painted in the fill colour at the fill
