@@ -512,6 +512,45 @@ impl CommentView {
         }
         true
     }
+
+    /// Open the floating editor without replacing a non-empty draft.
+    pub(crate) fn edit_comment(&mut self, a: &Annotation) {
+        let _ = self.open_comment(a, false);
+    }
+
+    /// Open a clicked comment, posting another edited comment's draft before switching.
+    fn switch_comment(&mut self, a: &Annotation) -> Option<Edit> {
+        self.open_comment(a, true)
+    }
+
+    fn open_comment(&mut self, a: &Annotation, post_existing: bool) -> Option<Edit> {
+        let post = match self.composer.as_ref() {
+            Some(Composer { page, kind: ComposerKind::Edit(index), .. }) if (*page, *index) == (a.page, a.index) => {
+                if let Some(c) = self.composer.as_mut() {
+                    c.focus = true;
+                }
+                return None;
+            }
+            Some(Composer { page, kind: ComposerKind::Edit(index), text, .. }) if post_existing => {
+                Some(Edit::SetAnnotationContents { page: *page, index: *index, text: text.trim_end().to_string() })
+            }
+            Some(c) if !c.text.is_empty() => return None,
+            _ => None,
+        };
+        let panel_available = self.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty());
+        if !panel_available {
+            return None;
+        }
+        self.editing = None;
+        self.composer = Some(Composer {
+            page: a.page,
+            at: [a.rect[2] as f64, a.rect[3] as f64],
+            kind: ComposerKind::Edit(a.index),
+            text: a.contents.clone().unwrap_or_default(),
+            focus: true,
+        });
+        post
+    }
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).
@@ -728,6 +767,21 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     {
         cv.context_at = Some((cx.page, cx.to_user(p)));
         cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
+    }
+    // A markup tool stays active after creating a mark. A click on an existing
+    // text markup edits that annotation instead of starting another selection.
+    if resp.clicked()
+        && cx.allowed
+        && matches!(cx.tool, QuickTool::Comment(tool) if tool.markup().is_some())
+        && let Some(a) = pointer.filter(|p| page_rect.contains(*p)).and_then(|p| cx.hit(p))
+        && is_markup(&a.subtype)
+    {
+        cv.selected = Some((cx.page, a.index));
+        cv.reveal = true;
+        if let Some(edit) = cv.switch_comment(a) {
+            view.pending_edit = Some(edit);
+        }
+        return true;
     }
     match cx.tool {
         // The shape just drawn is selected with its handles showing: they resize it without a
@@ -1118,6 +1172,12 @@ fn select_input(
             Some(a) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
+                if cx.allowed
+                    && is_markup(&a.subtype)
+                    && let Some(edit) = cv.switch_comment(a)
+                {
+                    view.pending_edit = Some(edit);
+                }
                 consumed = true;
             }
             None => cv.selected = None,
@@ -1129,13 +1189,9 @@ fn select_input(
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
     {
         cv.selected = Some((cx.page, a.index));
-        cv.composer = Some(Composer {
-            page: cx.page,
-            at: [a.rect[2] as f64, a.rect[3] as f64],
-            kind: ComposerKind::Edit(a.index),
-            text: a.contents.clone().unwrap_or_default(),
-            focus: true,
-        });
+        if let Some(edit) = cv.switch_comment(a) {
+            view.pending_edit = Some(edit);
+        }
         consumed = true;
     }
     consumed

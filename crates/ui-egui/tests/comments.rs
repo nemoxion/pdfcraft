@@ -209,26 +209,58 @@ trailer << /Root 1 0 R >>
 }
 
 #[test]
-fn a_new_highlight_opens_its_note_for_typing() {
+fn a_new_highlight_opens_the_floating_editor() {
     let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
-    assert_eq!(h.state().views[0].comments.editing, None);
+    assert_eq!(h.state().views[0].comments.composer, None);
     let (a, b) = {
         let v = &h.state().views[0];
         (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
     };
     drag(&mut h, a, b);
     assert_eq!(comments(&h).len(), 1);
-    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())), "the Comments panel edits the new highlight");
-    // An area highlight opens its note too, replacing the empty one.
+    let composer = h.state().views[0].comments.composer.as_ref().expect("the editor opened");
+    assert_eq!((composer.page, composer.kind, composer.text.as_str()), (0, pdfcraft_ui_egui::comments::ComposerKind::Edit(0), ""));
+    assert_eq!(h.state().views[0].comments.editing, None, "the Comments panel is not used instead");
+    h.get_by_label("Edit comment");
+    field(&h, "Add a comment");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOT") {
+        h.render().unwrap().save(format!("{dir}/highlight-comment-editor.png")).unwrap();
+    }
+
+    // An area highlight replaces an untouched empty editor with its own.
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     assert_eq!(comments(&h).len(), 2);
-    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, String::new())));
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Edit(1)));
     // A note being typed is kept: the next highlight is only selected.
-    h.state_mut().views[0].comments.editing = Some((0, 1, "typed".into()));
+    h.state_mut().views[0].comments.composer.as_mut().expect("editor").text = "typed".into();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
     assert_eq!(comments(&h).len(), 3);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
-    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "typed".into())));
+    let composer = h.state().views[0].comments.composer.as_ref().expect("the existing draft remains open");
+    assert_eq!((composer.kind, composer.text.as_str()), (pdfcraft_ui_egui::comments::ComposerKind::Edit(1), "typed"));
+}
+
+#[test]
+fn clicking_a_text_markup_opens_the_floating_editor() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    // Leave a draft open on a second mark, then click the first while the
+    // highlighter is still active. The draft is posted before editors switch.
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().views[0].comments.composer.as_mut().expect("second editor").text = "second note".into();
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Highlight));
+    click(&mut h, a + (b - a) * 0.5);
+    let comments = comments(&h);
+    assert_eq!(comments.len(), 2, "clicking the existing markup must not create another mark");
+    assert_eq!(comments[1].contents.as_deref(), Some("second note"), "the previous editor is posted before switching");
+    let composer = h.state().views[0].comments.composer.as_ref().expect("a click opens the editor");
+    assert_eq!((composer.page, composer.kind), (0, pdfcraft_ui_egui::comments::ComposerKind::Edit(0)));
+    h.get_by_label("Edit comment");
+    field(&h, "Add a comment");
 }
 
 #[test]
@@ -242,22 +274,19 @@ fn ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line() {
         (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
     };
     drag(&mut h, a, b);
-    h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && n.placeholder() != Some("Add a reply"))
-        .next()
-        .expect("highlight editor")
-        .click();
+    h.get_by_label("Edit comment");
     h.run_steps(2);
     h.event(egui::Event::Text("First line".into()));
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].comments.editing.as_ref().unwrap().2, "First line\n");
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "First line\n");
     assert_eq!(comments(&h)[0].contents.as_deref().unwrap_or(""), "", "a newline does not post");
     h.event(egui::Event::Text("Second line".into()));
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].comments.editing, None);
+    assert!(h.state().views[0].comments.composer.is_none());
     assert_eq!(comments(&h)[0].contents.as_deref(), Some("First line\nSecond line"));
     h.state_mut().undo();
     h.run_steps(2);
