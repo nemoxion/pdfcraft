@@ -209,3 +209,14 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+
+## Dark PDF page previews
+
+`view_dark_pages {doc, enabled}` applies the desktop dark-page filter to `page_render`
+(including textless editor backgrounds), using the same colour function as the GUI.
+This is a per-open-document view preference: it leaves PDF bytes, history, exports and
+printing unchanged, and reopening starts with the filter off. Explicit `view_reading_colors`
+presets take precedence; turning them off restores the dark-page choice. The desktop app
+separately persists its default for newly opened documents. `command_run` can invoke this
+tool as `view.dark_pages` with `doc` and `enabled` in `params`.

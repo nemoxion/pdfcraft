@@ -25,7 +25,7 @@ pub use raster::{
     MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
     Retiring, Tile, device_pixels, effective_scale,
 };
-pub use reading::{ReadingColors, ReadingParams};
+pub use reading::{ReadingColors, ReadingParams, dark_page_rgba};
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.

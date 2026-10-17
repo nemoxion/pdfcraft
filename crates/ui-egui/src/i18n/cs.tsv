@@ -19,6 +19,7 @@
 # commands is kept. Messages with a count but no `@plural` entry use count-neutral wording
 # ("Vybráno stránek: {n}"), because Czech has three plural forms.
 
+	Dark PDF pages	Tmavé stránky PDF
 	Menu	Nabídka
 	File	Soubor
 	Rotation:	Otočení:

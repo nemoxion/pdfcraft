@@ -337,8 +337,16 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
 }
 
 /// Paint focus and hover frames on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+pub(crate) fn paint_page(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    form: &[FormField],
+    view: &DocView,
+    colors: crate::page_colors::PageColors,
+) {
+    let pointer = painter.ctx().input(|i| i.pointer.hover_pos());
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
@@ -347,7 +355,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                paint_unbaked_widget(painter, xf, f, w, r);
+                paint_unbaked_widget(painter, xf, f, w, r, colors);
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -384,12 +392,12 @@ pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, t
     size.min(300.0) as f32
 }
 
-fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect, colors: crate::page_colors::PageColors) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");
-            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
-            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            painter.rect_filled(r, CornerRadius::same(1), colors.editor_paper(FIELD_FILL));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, colors.line_art(Color32::from_gray(180))), egui::StrokeKind::Inside);
             if !text.is_empty() {
                 let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
                 let zoom = xf.rect.width() / unrotated_w.max(1.0);
@@ -404,13 +412,13 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
                 // Multiline fields wrap at the box, as their page appearance does.
                 // At the width the size was fitted to: the box less 3 pt each side, scaled.
                 let wrap = if f.has(field_flags::MULTILINE) { (r.width() - 6.0 * zoom).max(1.0) } else { f32::INFINITY };
-                let galley = p.layout(display_text, egui::FontId::proportional(font_size), Color32::BLACK, wrap);
-                p.galley(align.anchor_size(pos, galley.size()).min, galley, Color32::BLACK);
+                let galley = p.layout(display_text, egui::FontId::proportional(font_size), colors.text(Color32::BLACK), wrap);
+                p.galley(align.anchor_size(pos, galley.size()).min, galley, colors.text(Color32::BLACK));
             }
         }
         FormFieldKind::List => {
-            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
-            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            painter.rect_filled(r, CornerRadius::same(1), colors.editor_paper(FIELD_FILL));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, colors.line_art(Color32::from_gray(180))), egui::StrokeKind::Inside);
             let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
             let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
@@ -428,34 +436,34 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
                 }
                 let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
                 if f.value.contains(export) {
-                    p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
+                    p.rect_filled(row_rect, CornerRadius::ZERO, colors.line_art(Color32::from_rgb(0x99, 0xC0, 0xDC)));
                 }
                 p.text(
                     egui::pos2(r.min.x + 3.0, y + font_size * 0.15),
                     egui::Align2::LEFT_TOP,
                     display,
                     egui::FontId::proportional(font_size),
-                    Color32::BLACK,
+                    colors.text(Color32::BLACK),
                 );
                 y += row_h;
             }
         }
         FormFieldKind::CheckBox => {
-            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
-            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            painter.rect_filled(r, CornerRadius::same(1), colors.editor_paper(FIELD_FILL));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, colors.line_art(Color32::from_gray(180))), egui::StrokeKind::Inside);
             let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
             if checked {
                 let sz = (r.height() * 0.75).clamp(8.0, 32.0);
-                painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
+                painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), colors.text(Color32::BLACK));
             }
         }
         FormFieldKind::Radio => {
-            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
-            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            painter.rect_filled(r, CornerRadius::same(1), colors.editor_paper(FIELD_FILL));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, colors.line_art(Color32::from_gray(180))), egui::StrokeKind::Inside);
             let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
             if selected {
                 let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
-                painter.circle_filled(r.center(), radius, Color32::BLACK);
+                painter.circle_filled(r.center(), radius, colors.text(Color32::BLACK));
             }
         }
         _ => {}
@@ -463,7 +471,14 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
 }
 
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, form: &[FormField], today: (i64, u32, u32)) -> Option<Edit> {
+pub(crate) fn overlay(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    form: &[FormField],
+    today: (i64, u32, u32),
+    colors: crate::page_colors::PageColors,
+) -> Option<Edit> {
     let pressed = view.forms.pressed;
     if !ctx.input(|i| i.pointer.primary_down()) {
         view.forms.pressed = false;
@@ -490,16 +505,16 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 let Some(fx) = view.forms.focus.as_mut() else { return };
                 // Sized from the text being typed, so an auto-sized field shrinks to keep it in view.
                 let font = (field_text_size(ui.painter(), f, w, &fx.text) * zoom).clamp(3.0, 64.0);
-                // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-                ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
+                // Match the caret to the displayed field background.
+                ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(colors.editor_paper(FIELD_FILL));
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                 te = te
                     // Wraps (inside the 3 px side margins) at the width the size was fitted to:
                     // the box less 3 pt each side, scaled.
                     .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
                     .font(egui::FontId::proportional(font))
-                    .background_color(FIELD_FILL)
-                    .text_color(Color32::BLACK)
+                    .background_color(colors.editor_paper(FIELD_FILL))
+                    .text_color(colors.text(Color32::BLACK))
                     .margin(egui::Margin::symmetric(3, 1))
                     .password(f.has(field_flags::PASSWORD))
                     .id(egui::Id::new(("form-field", view.id.0, &f.name, focus.widget)));
@@ -669,4 +684,43 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
     let page = w.page?;
     let xf = view.page_xform(page)?;
     Some(widget_rect(&xf, info, page, w.rect))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::page_colors::PageColors;
+
+    #[test]
+    fn dark_pages_unbaked_fields_paint_mapped_fills_and_text() {
+        let mut app = crate::PdfCraftApp::new();
+        app.open_bytes("form.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let xf = PageXform { rect: Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+        for colors in [
+            PageColors::Original,
+            PageColors::Dark,
+            PageColors::Reading(pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+            PageColors::Reading(pdfcraft_render::ReadingColors::parse("white-on-black", None, None, Some(true), Some(false)).unwrap()),
+        ] {
+            for name in ["name", "agree", "size"] {
+                let mut field = doc.form.iter().find(|f| f.name == name).unwrap().clone();
+                field.value = vec![if name == "name" { "Ada".into() } else { field.widgets[0].on_state.clone().unwrap() }];
+                let widget = &field.widgets[0];
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    paint_unbaked_widget(ui.painter(), &xf, &field, widget, Rect::from_min_size(egui::pos2(10.0, 10.0), vec2(150.0, 30.0)), colors);
+                });
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == colors.editor_paper(FIELD_FILL))));
+                let mark_color = output.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => text.galley.job.sections.first().map(|section| section.format.color),
+                    egui::Shape::Circle(circle) => Some(circle.fill),
+                    _ => None,
+                });
+                assert_eq!(mark_color, Some(colors.text(Color32::BLACK)), "{name}");
+                output.textures_delta.clear();
+            }
+        }
+        assert!(!doc.dirty && doc.can_undo().is_none());
+    }
 }

@@ -5801,3 +5801,30 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     // No area, or a box off the image, is refused.
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
+
+#[test]
+fn dark_pages_are_independent_of_document_history_and_render_pools() {
+    let (mut session, id) = session_with(1);
+    // Prepare real work in an inline pool: replacing the pool would reset these counters.
+    let doc = session.docs.iter_mut().find(|doc| doc.id == id).unwrap();
+    doc.renderer = RenderPool::new_inline(doc.display.clone(), doc.config.clone());
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest { scale: 1.0, ..Default::default() }]);
+    assert!(doc.renderer.try_recv().unwrap().error.is_none());
+    assert_eq!(doc.renderer.stats().rasterizations, 1);
+    let doc = session.get(id).unwrap();
+    let bytes = doc.bytes.clone();
+    let generation = doc.generation;
+    let stats = doc.renderer.stats();
+    assert_eq!(session.dark_pages(id), Some(false));
+    assert!(session.set_dark_pages(id, true));
+    assert!(!session.set_dark_pages(id, true));
+    assert_eq!(session.dark_pages(id), Some(true));
+    let doc = session.get(id).unwrap();
+    assert!(Arc::ptr_eq(&bytes, &doc.bytes));
+    assert_eq!(doc.generation, generation);
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(!doc.dirty);
+    assert!(session.set_dark_pages(id, false));
+    assert_eq!(session.dark_pages(DocId(u64::MAX)), None);
+    assert!(!session.set_dark_pages(DocId(u64::MAX), true));
+}

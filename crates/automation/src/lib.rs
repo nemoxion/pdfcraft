@@ -838,6 +838,7 @@ impl Automation {
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
+            "view_dark_pages" => self.view_dark_pages(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
@@ -1834,7 +1835,10 @@ impl Automation {
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
-        let data = encode_png(out.width, out.height, &out.rgba)?;
+        // Apply the shared filter after unpremultiplying for PNG output. Cached renderers
+        // keep original pixels, and explicit reading presets always take precedence.
+        let dark_pages = self.session.dark_pages(id) == Some(true) && self.session.reading_colors(id).is_none_or(|colors| colors.params.is_none());
+        let data = encode_png_with_dark_pages(out.width, out.height, &out.rgba, dark_pages)?;
         Ok(Content::Png { data, width: out.width, height: out.height })
     }
 
@@ -2486,6 +2490,10 @@ fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
 }
 
 fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
+    encode_png_with_dark_pages(width, height, premultiplied, false)
+}
+
+fn encode_png_with_dark_pages(width: u32, height: u32, premultiplied: &[u8], dark_pages: bool) -> Result<Vec<u8>> {
     let mut rgba = premultiplied.to_vec();
     for px in rgba.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
@@ -2493,6 +2501,11 @@ fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> 
             for c in &mut px[..3] {
                 *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
             }
+        }
+    }
+    if dark_pages {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            *pixel = pdfcraft_render::dark_page_rgba(*pixel);
         }
     }
     let mut out = Vec::new();

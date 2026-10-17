@@ -12,6 +12,13 @@ use crate::{Args, Automation, Result, ToolError};
 const MODES: &str = "off, black-on-white, white-on-black, yellow-on-black, green-on-black, custom";
 
 impl Automation {
+    pub(crate) fn view_dark_pages(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let enabled = a.opt_bool("enabled")?.ok_or_else(|| ToolError::InvalidArgs("enabled is required (true or false)".into()))?;
+        self.session.set_dark_pages(id, enabled);
+        Ok(json!({ "enabled": enabled }))
+    }
+
     /// Set the document's reading colours. Colours are only meaningful with `mode: "custom"`;
     /// `parse` enforces the rest and its errors are actionable.
     pub(crate) fn view_reading_colors(&mut self, a: &Args) -> Result<Value> {

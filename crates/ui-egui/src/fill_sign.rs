@@ -623,9 +623,10 @@ pub(crate) fn page_input(
     view: &mut DocView,
     signature: Option<&SavedSig>,
     initials: Option<&SavedSig>,
-    preview: &mut Option<(SavedSig, egui::TextureHandle)>,
+    preview: &mut Option<PageSignaturePreview>,
     author: &str,
     date_text: &Result<String, String>,
+    colors: crate::page_colors::PageColors,
 ) -> Option<FillAction> {
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
@@ -640,7 +641,7 @@ pub(crate) fn page_input(
     };
     if let Some(SavedSig::Image(image)) = saved {
         if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
-            let tex = image_texture(ui, image, preview);
+            let tex = page_image_texture(ui, image, preview, colors);
             xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
@@ -698,7 +699,13 @@ pub enum FillAction {
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.
-pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
+pub(crate) fn type_box(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    author: &str,
+    colors: crate::page_colors::PageColors,
+) -> Option<Edit> {
     let tb = view.fill_text.clone()?;
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
@@ -708,8 +715,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let mut cancel = false;
     egui::Area::new(egui::Id::new(("fill-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let Some(t) = view.fill_text.as_mut() else { return };
-        // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+        // Match the caret to the displayed editor background.
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(colors.paper());
         let width = ((t.text.chars().count().max(8) as f32) * t.size as f32 * 0.6 * zoom).clamp(60.0, 600.0);
         // The area's max rect is last frame's size, which caps the edit's width; widen it so the
         // box grows as text is typed.
@@ -718,8 +725,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             egui::TextEdit::singleline(&mut t.text)
                 .font(egui::FontId::proportional((t.size as f32 * zoom).max(8.0)))
                 .desired_width(width)
-                .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
-                .text_color(Color32::BLACK)
+                .background_color(colors.editor_paper(Color32::from_rgba_unmultiplied(255, 255, 255, 230)))
+                .text_color(colors.text(Color32::BLACK))
                 .hint_text(tl!("Type text"))
                 .id_salt("fill-text-edit"),
         );
@@ -1024,6 +1031,28 @@ fn scan_tab(
     browse
 }
 
+pub(crate) struct PageSignaturePreview {
+    source: SignatureImage,
+    colors: crate::page_colors::PageColors,
+    texture: egui::TextureHandle,
+}
+
+fn page_image_texture(
+    ui: &egui::Ui,
+    image: &SignatureImage,
+    cache: &mut Option<PageSignaturePreview>,
+    colors: crate::page_colors::PageColors,
+) -> egui::TextureId {
+    if cache.as_ref().is_some_and(|cached| cached.source != *image || cached.colors != colors) {
+        *cache = None;
+    }
+    let cached = cache.get_or_insert_with(|| {
+        let pixels = colors.image(egui::ColorImage::from_rgba_unmultiplied(image.size(), image.rgba()));
+        PageSignaturePreview { source: image.clone(), colors, texture: ui.ctx().load_texture("page-signature", pixels, egui::TextureOptions::LINEAR) }
+    });
+    cached.texture.id()
+}
+
 fn image_texture(ui: &egui::Ui, image: &SignatureImage, cache: &mut Option<(SavedSig, egui::TextureHandle)>) -> egui::TextureId {
     let key = SavedSig::Image(image.clone());
     if cache.as_ref().is_some_and(|(s, _)| *s != key) {
@@ -1251,6 +1280,37 @@ mod tests {
         assert!(d.undo_stroke());
         assert!(d.strokes.is_empty());
         assert!(!d.undo_stroke());
+    }
+
+    #[test]
+    fn page_signature_cache_uses_typed_keys_and_leaves_dialog_preview_alone() {
+        use super::*;
+        use crate::page_colors::PageColors;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 0, 0, 128])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let source = SignatureImage::from_bytes(png.get_ref()).unwrap();
+        let original = source.rgba().to_vec();
+        let ctx = egui::Context::default();
+        let (mut page, mut dialog) = (None, None);
+        let mut last = None;
+        let mut dialog_id = None;
+        for colors in [PageColors::Dark, PageColors::Dark, PageColors::Original, PageColors::Reading(pdfcraft_render::ReadingColors::YELLOW_ON_BLACK)]
+        {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let id = page_image_texture(ui, &source, &mut page, colors);
+                if let Some((previous, previous_id)) = last {
+                    assert_eq!(id == previous_id, colors == previous, "unchanged typed keys retain their texture");
+                }
+                last = Some((colors, id));
+                let id = image_texture(ui, &source, &mut dialog);
+                if let Some(previous_id) = dialog_id {
+                    assert_eq!(id, previous_id);
+                }
+                dialog_id = Some(id);
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(source.rgba(), original);
     }
 
     #[test]

@@ -114,9 +114,7 @@ impl ContentView {
 #[derive(Default)]
 pub(crate) struct MoveBackground {
     key: Option<(u64, usize, usize)>,
-    renderer: Option<pdfcraft_render::RenderPool>,
-    texture: Option<egui::TextureHandle>,
-    tag: Option<u64>,
+    raster: Option<crate::preview_raster::PreviewRaster>,
     /// The item's display-space box when the gesture started.
     from: Option<[f64; 4]>,
     /// The applied move's box. The page raster on screen still has the item where it was until
@@ -126,10 +124,10 @@ pub(crate) struct MoveBackground {
 
 impl MoveBackground {
     pub fn pending(&self) -> bool {
-        self.renderer.is_some() && self.texture.is_none()
+        self.raster.as_ref().is_some_and(|raster| raster.pending())
     }
 
-    pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32) {
+    pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32, dark: bool) {
         let key = match (cv.grab, cv.selected) {
             (Some((gp, Grab::Move, _)), Some((sp, si))) if gp == sp => Some((doc.edit_generation(), sp, si)),
             _ => None,
@@ -137,46 +135,35 @@ impl MoveBackground {
         if !(key.is_none() && self.settling.is_some()) && self.key != key {
             *self = Self { key, ..Default::default() };
             if let Some((_, page, index)) = key {
-                self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.raster = doc.added_content_preview(page, index).ok().map(|p| crate::preview_raster::PreviewRaster::new(p.renderer()));
                 self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
             }
         }
-        if self.settling.is_some() {
-            return;
+        // A reading preset changes the renderer configuration even while the applied move
+        // waits for the page. Keep the gesture geometry, but refresh that textless source.
+        if self.settling.is_some()
+            && let Some((generation, page, index)) = self.key
+            && generation != doc.edit_generation()
+        {
+            self.key = Some((doc.edit_generation(), page, index));
+            self.raster = doc.added_content_preview(page, index).ok().map(|p| crate::preview_raster::PreviewRaster::new(p.renderer()));
         }
-        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let (Some((_, page, _)), Some(raster)) = (self.key, self.raster.as_mut()) else { return };
         let Some(p) = doc.info.pages.get(page) else { return };
         let max_side = ctx.input(|i| i.max_texture_side) as f32;
         let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
-        let tag = (scale * 1000.0) as u64;
-        if self.tag != Some(tag) {
-            renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
-            self.tag = Some(tag);
-        }
-        if let Some(out) = renderer.try_recv() {
-            if out.error.is_some() {
-                // Without a background the item stays put while dragged, as before.
-                self.renderer = None;
-                return;
-            }
-            if out.request.tag == tag {
-                self.texture = Some(ctx.load_texture(
-                    "added-content-move-background",
-                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
-                    egui::TextureOptions::LINEAR,
-                ));
-            }
-        }
-        if self.pending() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
+        let colors = crate::page_colors::PageColors::for_reading(dark, doc.renderer.reading_colors());
+        raster.prepare(ctx, page, scale, colors, false);
     }
 
     /// The move was applied: keep the preview, now at the new generation, until the page is
     /// rendered again. Any other edit ends it.
     pub fn committed(&mut self, edit: &Edit, generation: u64) {
         match edit {
-            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+            Edit::UpdateContent { page, index, content }
+                if self.raster.as_ref().is_some_and(|raster| raster.texture().is_some())
+                    && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) =>
+            {
                 self.key = Some((generation, *page, *index));
                 self.settling = Some(content.rect());
             }
@@ -203,7 +190,11 @@ impl MoveBackground {
         cv: &ContentView,
         page_tex: Option<egui::TextureId>,
     ) {
-        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) =
+            (self.key, self.raster.as_ref().and_then(|raster| raster.texture()), page_tex, self.from)
+        else {
+            return;
+        };
         if kp != page {
             return;
         }
@@ -488,7 +479,13 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    added: &[Added],
+    colors: crate::page_colors::PageColors,
+) -> (Option<Edit>, bool) {
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
     let zoom = xf.rect.width() / xf.pw.max(1.0);
@@ -527,10 +524,10 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
         let Some(t) = view.content.draft.as_mut() else { return };
         ui.set_width(r.width() + 64.0);
         if let Some(source_rect) = source_rect.filter(|_| !background_ready) {
-            ui.painter().rect_filled(source_rect.union(r).expand(1.0), CornerRadius::ZERO, Color32::WHITE);
+            ui.painter().rect_filled(source_rect.union(r).expand(1.0), CornerRadius::ZERO, colors.editor_paper(Color32::WHITE));
         }
-        // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+        // Match the caret to the displayed editor background.
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(colors.paper());
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -539,8 +536,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .font(font)
                     .desired_width(r.width().max(60.0))
                     .desired_rows(1)
-                    .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
-                    .text_color(Color32::from_rgb(cr, cg, cb))
+                    .background_color(if background_ready { Color32::TRANSPARENT } else { colors.editor_paper(Color32::WHITE) })
+                    .text_color(colors.text(Color32::from_rgb(cr, cg, cb)))
                     .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit"),
             );
@@ -952,5 +949,54 @@ mod tests {
         assert!(i.flip_h && !i.flip_v, "Flip horizontal mirrors left and right");
         let i = flipped("Flip vertical");
         assert!(i.flip_v && !i.flip_h, "Flip vertical mirrors top and bottom");
+    }
+
+    #[test]
+    fn added_content_move_background_follows_dark_and_reading_colors_through_release() {
+        let mut app = crate::PdfCraftApp::new();
+        let bytes = app.session.create_blank(100.0, 100.0, 1).unwrap();
+        app.open_bytes("move.pdf", None, bytes.as_ref().clone()).unwrap();
+        let text = AddedText { text: "Move".into(), rect: [10.0, 20.0, 80.0, 40.0], ..default_style() };
+        assert!(app.apply_edit(Edit::AddText { page: 0, text: text.clone() }));
+        let content = AddedContent::Text(text);
+        let id = app.views[0].id;
+        let source = app.session.get(id).unwrap().bytes.clone();
+        let ctx = egui::Context::default();
+        let mut cv = ContentView { selected: Some((0, 0)), grab: Some((0, Grab::Move, Pos2::ZERO)), ..Default::default() };
+        let mut background = MoveBackground::default();
+        let mut previous_texture = None;
+        for settling in [false, true] {
+            if settling {
+                background
+                    .committed(&Edit::UpdateContent { page: 0, index: 0, content: content.clone() }, app.session.get(id).unwrap().edit_generation());
+                cv.grab = None;
+            }
+            for (dark, reading) in [
+                (false, Default::default()),
+                (true, Default::default()),
+                (false, Default::default()),
+                (true, pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+            ] {
+                app.set_reading_colors(reading);
+                let doc = app.session.get(id).unwrap();
+                for _ in 0..100 {
+                    background.prepare(&ctx, doc, &cv, 1.0, dark);
+                    if background.raster.as_ref().is_some_and(|r| r.texture().is_some()) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let texture = background.raster.as_ref().unwrap().texture().unwrap();
+                assert_ne!(Some(texture.id()), previous_texture, "display colour changes refresh the move background");
+                previous_texture = Some(texture.id());
+                let pixels = crate::page_colors::uploaded_pixels(&ctx, texture);
+                let colors = crate::page_colors::PageColors::for_reading(dark, reading);
+                assert_eq!(pixels.first(), Some(&colors.paper()), "move background matches the page, settling={settling}");
+                assert_eq!(background.settling.is_some(), settling);
+                assert_eq!(doc.bytes, source, "display changes do not edit the PDF");
+            }
+        }
+        background.page_received(0);
+        assert!(background.raster.is_none());
     }
 }

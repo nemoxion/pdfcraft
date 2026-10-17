@@ -387,6 +387,8 @@ pub struct Document {
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
     editor: Option<Editor>,
     config: RenderConfig,
+    /// Display-only dark-page preference; independent of document history and render pools.
+    dark_pages: bool,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
@@ -3582,6 +3584,7 @@ impl Session {
             sig_cache,
             editor,
             config,
+            dark_pages: false,
             js_output: Default::default(),
             xfa,
             xfa_template: None,
@@ -4753,6 +4756,20 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
+    }
+
+    /// Set display-only dark pages. Does not change bytes, history, or render pools.
+    /// Explicit reading-colour presets take precedence without resetting this preference.
+    pub fn set_dark_pages(&mut self, id: DocId, enabled: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|doc| doc.id == id) else { return false };
+        let changed = doc.dark_pages != enabled;
+        doc.dark_pages = enabled;
+        changed
+    }
+
+    /// The dark-page preference; `None` when no such document is open.
+    pub fn dark_pages(&self, id: DocId) -> Option<bool> {
+        Some(self.get(id)?.dark_pages)
     }
 
     /// The document's reading-colours setting; `None` when no such document is open.

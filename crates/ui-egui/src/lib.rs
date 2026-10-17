@@ -6,6 +6,8 @@
 //! `pdfcraft-engine`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// The persisted settings object includes both upstream preferences and page colours.
+#![recursion_limit = "256"]
 
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
@@ -93,6 +95,7 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 pub mod motion;
+mod page_colors;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -100,6 +103,7 @@ mod panels;
 #[cfg(not(target_arch = "wasm32"))]
 mod pickers;
 pub mod prepare;
+mod preview_raster;
 mod print_ui;
 mod signature_drag;
 pub mod units;
@@ -772,6 +776,7 @@ pub struct PdfCraftApp {
     pub initials: Option<fill_sign::SavedSig>,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
+    pub(crate) page_signature_preview: Option<fill_sign::PageSignaturePreview>,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
     /// The Scan tab's photo, keyed by its version.
     pub(crate) signature_photo: Option<(u64, egui::TextureHandle)>,
@@ -1050,6 +1055,7 @@ impl PdfCraftApp {
             signature: None,
             initials: None,
             signature_draft: Default::default(),
+            page_signature_preview: None,
             signature_preview: None,
             signature_photo: None,
             saved_signature_previews: [None, None],
@@ -2005,6 +2011,11 @@ impl PdfCraftApp {
         }
     }
 
+    /// The current tab's dark-page choice, or the preference for the next document on Home.
+    pub fn dark_pages_enabled(&self) -> bool {
+        self.active_ids().map_or(self.view_defaults.dark_pages, |(i, _)| self.views[i].dark_pages)
+    }
+
     /// The app-wide reading-colours preference: sets it and applies it to every open document,
     /// not just the active one (Preferences ▸ Reading colours, Acrobat's Replace Document
     /// Colors). A document the change actually touches re-renders.
@@ -2233,6 +2244,7 @@ impl PdfCraftApp {
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
+            "dark_pages": self.view_defaults.dark_pages,
             "units": self.units,
             "language": self.language,
             "reading_colors": self.reading_colors,
@@ -2338,6 +2350,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(on) = v["dark_pages"].as_bool() {
+            self.view_defaults.dark_pages = on;
         }
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;

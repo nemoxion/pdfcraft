@@ -6495,3 +6495,41 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn dark_pages_through_tools_preserve_documents_and_reading_presets() {
+    let dir = workdir("dark-pages");
+    std::fs::write(dir.join("a.pdf"), reading_colors_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation, id| a.call("page_render", &json!({ "doc": id, "page": 1, "dpi": 72 })).unwrap();
+    let original = render(&mut a, doc);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true })), json!({ "enabled": true }));
+    let dark = render(&mut a, doc);
+    assert_ne!(dark, original);
+    assert_eq!(pixel(&png_pixels(&dark[0]), 10, 290), [25, 25, 25, 255]);
+    assert_eq!(render(&mut a, other), original, "the preference is per document");
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), info, "view changes do not alter history or dirty state");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "dark-saved.pdf", "full": false }));
+    assert_eq!(std::fs::read(dir.join("dark-saved.pdf")).unwrap(), std::fs::read(dir.join("a.pdf")).unwrap());
+    // Save As may reserialize the file; it must still retain the original page colours.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "dark-full.pdf", "full": true }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "dark-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(render(&mut a, reopened), original, "saved PDFs contain original colours");
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black" }));
+    let preset = render(&mut a, doc);
+    assert_eq!(pixel(&png_pixels(&preset[0]), 10, 290), [0, 0, 0, 255], "explicit preset wins");
+    ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": false }));
+    assert_eq!(render(&mut a, doc), preset);
+    ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true }));
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "off" }));
+    assert_eq!(render(&mut a, doc), dark, "dark preference resumes after disabling the preset");
+    for args in [json!({ "doc": doc }), json!({ "doc": doc, "enabled": "yes" }), json!({ "doc": 999999, "enabled": true })] {
+        assert!(a.call("view_dark_pages", &args).is_err());
+    }
+    assert_eq!(render(&mut a, doc), dark, "invalid calls leave the setting unchanged");
+    ok(&mut a, "command_run", json!({ "id": "view.dark_pages", "params": { "doc": doc, "enabled": false } }));
+    assert_eq!(render(&mut a, doc), original, "registry dispatch uses the same tool");
+}

@@ -66,9 +66,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                // Keep the three icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
+                    + 3.0 * button
                     + 50.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
@@ -280,6 +280,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
+                    let dark_pages = app.dark_pages_enabled();
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("monitor", tl!("Use system setting")),
                         ThemePreference::Light => ("sun", tl!("Light gray")),
@@ -296,6 +297,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                     }
                     egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+                    if icons::button(ui, "file-text", button, dark_pages, tl!("Dark PDF pages")).clicked() {
+                        app.execute("view.dark_pages");
+                    }
                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
@@ -319,6 +323,11 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.execute(command);
             ui.close();
         }
+    }
+    ui.separator();
+    let mut dark_pages = app.dark_pages_enabled();
+    if ui.add(widgets::checkbox(&mut dark_pages, tl!("Dark PDF pages"))).changed() {
+        app.execute("view.dark_pages");
     }
     ui.separator();
     if ui.button(tl!("Appearance settings…")).clicked() {

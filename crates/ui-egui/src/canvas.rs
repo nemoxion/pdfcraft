@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHand
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_colors::PageColors;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
@@ -27,7 +28,7 @@ const TEXT_TAG: u64 = 1 << 62;
 const GRID_TAG: u64 = 1 << 61;
 /// Preview rasters tagged with this bit are converted to luminance on receipt, matching the
 /// monochrome print requested by Print ▸ Print in grayscale.
-const GRAYSCALE_TAG: u64 = 1 << 60;
+const GRAYSCALE_TAG: u64 = 1 << 59;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
@@ -176,12 +177,14 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session.
     pub highlight_fields: bool,
+    /// Recolour rendered pages for comfortable reading on a dark background.
+    pub dark_pages: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
+        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false, dark_pages: false }
     }
 }
 
@@ -379,6 +382,8 @@ pub struct DocView {
     pub current: usize,
     pub organize: bool,
     pub highlight_fields: bool,
+    /// Display-only dark-page filter; PDF content and exported pixels are unchanged.
+    pub dark_pages: bool,
     pub page_input: String,
     /// Select the replacement page label once if its editor remains focused.
     pub(crate) page_input_reselect: bool,
@@ -691,6 +696,7 @@ impl DocView {
             current: 0,
             organize: false,
             highlight_fields: defaults.highlight_fields,
+            dark_pages: defaults.dark_pages,
             page_input: "1".into(),
             page_input_reselect: false,
             notice_dismissed: false,
@@ -917,7 +923,7 @@ impl DocView {
     }
 
     pub fn render_pending(&self) -> bool {
-        !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
+        !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending() || self.signature_drag.pending()
     }
 
     /// The cached tile keys of a page, as (scale tag, tile x, tile y) (diagnostics and tests).
@@ -956,6 +962,21 @@ impl DocView {
             f.matches.clear();
             f.current = None;
         }
+    }
+
+    /// Toggle the display-only page filter and refresh every retained page raster.
+    pub fn set_dark_pages(&mut self, on: bool) {
+        if self.dark_pages == on {
+            return;
+        }
+        self.dark_pages = on;
+        for page in self.pages.values_mut() {
+            page.tag = STALE_TAG;
+        }
+        self.stale_thumbs.extend(self.thumbs.keys().copied());
+        self.grid_pages.clear();
+        self.tiles.clear();
+        self.last_queue.clear();
     }
 
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
@@ -1748,7 +1769,8 @@ impl DocView {
         let started = std::time::Instant::now();
         for _ in 0..budget {
             let Some(r) = pool.try_recv() else { break };
-            uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
+            let colors = PageColors::for_request(self.dark_pages, pool.reading_colors(), r.request.tag);
+            uploaded = uploaded.saturating_add(self.receive_result(ctx, r, colors));
             // One whole-page upload may exceed the frame allowance; it must still progress.
             if uploaded >= UPLOAD_BYTES_PER_FRAME {
                 break;
@@ -1760,7 +1782,7 @@ impl DocView {
         }
     }
 
-    fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
+    fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage, colors: PageColors) -> usize {
         if !self.last_queue.contains(&r.request) {
             return 0;
         }
@@ -1803,7 +1825,7 @@ impl DocView {
             return 0;
         }
         // The length was checked above, so the renderer's buffer becomes the texture data as is.
-        let img = texture_image([r.width as usize, r.height as usize], r.rgba);
+        let img = texture_image([r.width as usize, r.height as usize], r.rgba, colors);
         if let Some(t) = r.request.tile {
             let key = (page, r.request.tag, t.x, t.y);
             let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
@@ -2297,6 +2319,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
+    let colors = PageColors::for_reading(app.views[index].dark_pages, doc.renderer.reading_colors());
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
@@ -2657,7 +2680,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         view.prepare.selected = None;
     }
     view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
-    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
+    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale, view.dark_pages);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
     if editing_content {
@@ -2665,7 +2688,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.content.selected = None;
     }
-    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+    view.move_background.prepare(ui.ctx(), doc, &view.content, scale, view.dark_pages);
 
     // A destination's position (bookmarks, links) refines `goto`: its point at the window's
     // top-left, or the centre of a /FitR rectangle at the window's centre.
@@ -2763,7 +2786,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
             // Soft shadow + paper.
             painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+            let page_paper = colors.paper();
+            painter.rect_filled(r, CornerRadius::ZERO, page_paper);
             if let Some(err) = view.errors.get(&i) {
                 painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
                 icons::paint(
@@ -2809,7 +2833,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         let now = ui.input(|inp| inp.time);
                         let since = *view.waiting_since.entry(i).or_insert(now);
                         let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
-                        painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), t.text_faint);
+                        let loading_color = colors.loading_color(t.text_faint);
+                        painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), loading_color);
                     }
                 }
                 if tiled && r.intersects(visible) {
@@ -2953,9 +2978,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     view,
                     signature.as_ref(),
                     initials.as_ref(),
-                    &mut app.signature_preview,
+                    &mut app.page_signature_preview,
                     &author,
                     &date_text,
+                    colors,
                 ) {
                     Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
                     Some(crate::fill_sign::FillAction::Signature(e)) => {
@@ -3102,7 +3128,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
             let preview_target =
                 (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
-            view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
+            view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale, view.dark_pages);
             view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
 
             // Text layer: find matches, selection, I-beam and drag-to-select.
@@ -3283,7 +3309,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if area_tool {
                 crate::redact_ui::paint(ui, painter, i, view);
             }
-            comments::paint_page(ui, painter, &pcx, view);
+            comments::paint_page(ui, painter, &pcx, view, colors);
             if editing_content {
                 crate::content_ui::paint_page(ui, painter, &xf, i, info, &added, view);
             }
@@ -3299,7 +3325,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if preparing {
                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
             } else {
-                crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
+                crate::forms_ui::paint_page(painter, &xf, i, info, &form, view, colors);
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -3720,16 +3746,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info, colors) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today) {
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today, colors) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &author, colors) {
         view.pending_edit = Some(e);
     }
-    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, &added);
+    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, &added, colors);
     if typed.is_some() {
         view.pending_edit = typed;
     }
@@ -5054,14 +5080,15 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
     }
 }
 
-/// A rendered raster as texture data. Its words are premultiplied RGBA bytes, exactly
-/// `Color32`s, so the renderer's buffer becomes the image without a copy on the UI thread.
-pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -> egui::ColorImage {
-    match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
+/// A rendered raster as texture data. Without the dark filter, its premultiplied RGBA words
+/// become the image without a copy. Reading-colour presets are already applied by the renderer.
+pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels, colors: PageColors) -> egui::ColorImage {
+    let image = match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
         Ok(px) if px.len() == size[0].saturating_mul(size[1]) => egui::ColorImage::new(size, px),
         Ok(px) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&px)),
         Err((_, words)) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&words)),
-    }
+    };
+    colors.image(image)
 }
 
 /// A luminance preview for a monochrome print. `Color32` stores premultiplied pixels, so a
@@ -5265,9 +5292,195 @@ trailer << /Root 1 0 R >>
         let size = [out.width as usize, out.height as usize];
         let copied = egui::ColorImage::from_rgba_premultiplied(size, &out.rgba);
         let at = out.rgba.as_ptr();
-        let img = texture_image(size, out.rgba);
+        let img = texture_image(size, out.rgba, PageColors::Original);
         assert_eq!(img, copied);
         assert_eq!(img.pixels.as_ptr().cast::<u8>(), at, "the renderer's own buffer");
+    }
+
+    fn upload_result(view: &mut DocView, ctx: &egui::Context, result: pdfcraft_render::RenderedPage) -> usize {
+        let colors = PageColors::for_request(view.dark_pages, Default::default(), result.request.tag);
+        view.receive_result(ctx, result, colors)
+    }
+
+    use crate::page_colors::uploaded_pixels;
+
+    fn reading_texture(v: &DocView, request: RenderRequest) -> &egui::TextureHandle {
+        if let Some(tile) = request.tile {
+            v.tiles.get(&(request.page, request.tag, tile.x, tile.y)).unwrap()
+        } else if request.tag & GRID_TAG != 0 {
+            &v.grid_pages.get(&request.page).unwrap().1
+        } else if request.tag & THUMB_TAG != 0 {
+            &v.thumbs.get(&request.page).unwrap().tex
+        } else {
+            &v.pages.get(&request.page).unwrap().tex
+        }
+    }
+
+    fn reading_requests(info: &DocInfo) -> Vec<RenderRequest> {
+        let mut v = view(1, PageLayout::Single, true);
+        v.need_thumbnail(0, true);
+        vec![
+            RenderRequest { scale: 1.0, tag: scale_tag(1.0), ..Default::default() },
+            v.thumbnail_requests(info, 1.0)[0],
+            RenderRequest { scale: 1.0, tag: GRID_TAG, ..Default::default() },
+            RenderRequest { scale: 8.0, tag: scale_tag(8.0), tile: Some(Tile { x: 0, y: 0, w: 2, h: 2 }), ..Default::default() },
+        ]
+    }
+
+    fn patterned_result(request: RenderRequest) -> pdfcraft_render::RenderedPage {
+        let mut result = solid_result(request, 2, 2);
+        let pixels = [Color32::WHITE, Color32::BLACK, Color32::RED, Color32::BLUE];
+        result.rgba = pdfcraft_render::Pixels::from(pixels.iter().map(|pixel| u32::from_ne_bytes(pixel.to_array())).collect::<Vec<_>>());
+        result
+    }
+
+    #[test]
+    fn dark_pages_refresh_page_outline_grid_and_zoom_tiles_in_both_directions() {
+        let info = thumbnail_info(1);
+        let original = vec![Color32::WHITE, Color32::BLACK, Color32::RED, Color32::BLUE];
+        for request in reading_requests(&info) {
+            let ctx = egui::Context::default();
+            let mut v = view(1, PageLayout::Single, true);
+            v.last_queue = vec![request];
+            assert_eq!(upload_result(&mut v, &ctx, patterned_result(request)), 16);
+            assert_eq!(uploaded_pixels(&ctx, reading_texture(&v, request)), original);
+            for dark in [true, false] {
+                v.set_dark_pages(dark);
+                // Grid consumers request a replacement when their retained raster is absent.
+                if request.tag & GRID_TAG != 0 {
+                    assert!(v.grid_pages.is_empty());
+                }
+                v.begin_render_frame();
+                if request.tag & THUMB_TAG != 0 {
+                    v.need_thumbnail(0, true);
+                } else {
+                    v.frame_queue.push(request);
+                }
+                let queue = v.prepare_render_queue(&info, 1.0);
+                assert!(queue.contains(&request), "replacement demanded for {request:?}, dark={dark}");
+                v.last_queue = queue;
+                assert_eq!(upload_result(&mut v, &ctx, patterned_result(request)), 16);
+                let pixels = uploaded_pixels(&ctx, reading_texture(&v, request));
+                if dark {
+                    assert!(pixels[0].r() < 40, "white paper becomes dark: {pixels:?}");
+                    assert!(pixels[1].r() > 215, "black marks become light: {pixels:?}");
+                    assert_ne!(pixels, original);
+                } else {
+                    assert_eq!(pixels, original, "restores the original raster exactly");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dark_pages_reject_obsolete_results_and_colour_renewed_results_in_the_current_mode() {
+        let info = thumbnail_info(1);
+        for request in reading_requests(&info) {
+            let ctx = egui::Context::default();
+            let mut v = view(1, PageLayout::Single, true);
+            for dark in [true, false, true, false] {
+                v.last_queue = vec![request];
+                v.set_dark_pages(dark);
+                assert_eq!(upload_result(&mut v, &ctx, patterned_result(request)), 0, "obsolete demand rejected");
+                let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+                let only_fonts = output.textures_delta.set.keys().all(|id| *id == egui::TextureId::Managed(0));
+                output.textures_delta.clear();
+                assert!(only_fonts, "rejected results upload no reading textures");
+                // A worker result from the previous mode is safe once the same raw-raster
+                // request is demanded again: colouring occurs on receipt, not in the worker.
+                v.last_queue = vec![request];
+                assert_eq!(upload_result(&mut v, &ctx, patterned_result(request)), 16);
+                let pixels = uploaded_pixels(&ctx, reading_texture(&v, request));
+                assert_eq!(pixels[0], if dark { PageColors::Dark.raster(Color32::WHITE) } else { Color32::WHITE });
+            }
+        }
+    }
+
+    #[test]
+    fn dark_pages_same_mode_keeps_cached_textures_and_pending_work() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(1);
+        let requests = reading_requests(&info);
+        let mut v = view(1, PageLayout::Single, true);
+        v.set_dark_pages(true);
+        v.last_queue = requests.clone();
+        for request in &requests {
+            upload_result(&mut v, &ctx, patterned_result(*request));
+        }
+        let ids: Vec<_> = requests.iter().map(|r| reading_texture(&v, *r).id()).collect();
+        v.set_dark_pages(true);
+        assert_eq!(v.last_queue, requests);
+        assert_eq!(requests.iter().map(|r| reading_texture(&v, *r).id()).collect::<Vec<_>>(), ids);
+        assert!(v.stale_thumbs.is_empty() && v.stale_tiles.is_empty());
+        assert_eq!(v.pages.get(&0).unwrap().tag, requests[0].tag);
+    }
+
+    #[test]
+    fn dark_pages_print_preview_uploads_original_colours_and_reuses_them_across_toggles() {
+        let ctx = egui::Context::default();
+        let mut v = view(1, PageLayout::Single, true);
+        v.set_dark_pages(true);
+        v.queue_print_previews(&[(0, 1.0)]);
+        let request = v.frame_queue.pop().unwrap();
+        v.last_queue = vec![request];
+        upload_result(&mut v, &ctx, patterned_result(request));
+        let original = vec![Color32::WHITE, Color32::BLACK, Color32::RED, Color32::BLUE];
+        assert_eq!(uploaded_pixels(&ctx, &v.print_pages.get(&0).unwrap().1), original);
+        let id = v.print_pages.get(&0).unwrap().1.id();
+        for dark in [false, true] {
+            v.set_dark_pages(dark);
+            v.begin_render_frame();
+            v.queue_print_previews(&[(0, 1.0)]);
+            assert!(v.frame_queue.is_empty(), "original-colour preview remains fresh");
+            assert_eq!(v.print_pages.get(&0).unwrap().1.id(), id);
+        }
+        // A newly demanded preview arriving after a toggle must also stay unfiltered.
+        v.queue_print_previews(&[(0, 2.0)]);
+        let request = v.frame_queue.pop().unwrap();
+        v.set_dark_pages(false);
+        v.set_dark_pages(true);
+        v.last_queue = vec![request];
+        upload_result(&mut v, &ctx, patterned_result(request));
+        assert_eq!(uploaded_pixels(&ctx, &v.print_pages.get(&0).unwrap().1), original);
+    }
+
+    #[test]
+    fn dark_pages_preserve_rendered_reading_presets_and_print_original_colours() {
+        use pdfcraft_render::{ReadingColors, RenderConfig};
+        let body = "0 0 0 rg 10 10 30 20 re f";
+        let pdf = Arc::new(format!("%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{body}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF", body.len()).into_bytes());
+        for reading in [ReadingColors::WHITE_ON_BLACK, ReadingColors::YELLOW_ON_BLACK, ReadingColors::BLACK_ON_WHITE] {
+            let config = RenderConfig { reading_colors: reading, ..Default::default() };
+            let mut renderer = pdfcraft_render::PageRenderer::new(pdf.clone(), config.clone());
+            let request = RenderRequest { scale: 1.0, tag: scale_tag(1.0), ..Default::default() };
+            let raw = renderer.render(request);
+            assert!(raw.error.is_none(), "{:?}", raw.error);
+            let expected = egui::ColorImage::from_rgba_premultiplied([100, 50], &raw.rgba).pixels;
+            let ctx = egui::Context::default();
+            let mut v = view(1, PageLayout::Single, true);
+            let pool = RenderPool::new_inline(pdf.clone(), config);
+            for dark in [false, true, false, true] {
+                v.set_dark_pages(dark);
+                v.last_queue = vec![request];
+                pool.set_queue(vec![request]);
+                v.receive(&ctx, &pool);
+                assert_eq!(uploaded_pixels(&ctx, &v.pages.get(&0).unwrap().tex), expected, "preset={reading:?}, dark={dark}");
+            }
+            let print = RenderRequest { tag: PRINT_TAG | request.tag, ..request };
+            v.last_queue = vec![print];
+            pool.set_queue(vec![print]);
+            v.receive(&ctx, &pool);
+            let pixels = uploaded_pixels(&ctx, &v.print_pages.get(&0).unwrap().1);
+            assert_eq!(pixels[0], Color32::WHITE, "print paper ignores both display modes");
+            assert!(pixels.contains(&Color32::BLACK), "print marks retain original black ink");
+            // Removing the preset restores the still-enabled dark-page preference.
+            let pool = RenderPool::new_inline(pdf.clone(), Default::default());
+            v.last_queue = vec![request];
+            pool.set_queue(vec![request]);
+            v.receive(&ctx, &pool);
+            let pixels = uploaded_pixels(&ctx, &v.pages.get(&0).unwrap().tex);
+            assert!(pixels[0].r() < 40, "dark paper resumes when reading colours are off");
+        }
     }
 
     #[test]
@@ -5527,7 +5740,7 @@ trailer << /Root 1 0 R >>
         v.need_thumbnail(0, true);
         let first = v.prepare_render_queue(&info, 1.0);
         v.last_queue = first.clone();
-        assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
+        assert_eq!(upload_result(&mut v, &ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
         assert!(v.prepare_render_queue(&info, 1.0).is_empty());
         v.begin_render_frame();
         v.need_thumbnail(9999, true);
@@ -5550,19 +5763,19 @@ trailer << /Root 1 0 R >>
         v.last_queue = v.prepare_render_queue(&info, 2.0);
         // Valid pixels: only the request gate can keep these out (a size check can't).
         let obsolete = || solid_result(first, 132, 171);
-        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert_eq!(upload_result(&mut v, &ctx, obsolete()), 0);
         assert!(v.thumbs.is_empty(), "a result for the old DPI is not uploaded");
         // The same result is uploaded while its request is current.
         v.last_queue = vec![first];
-        assert_eq!(v.receive_result(&ctx, obsolete()), 132 * 171 * 4);
+        assert_eq!(upload_result(&mut v, &ctx, obsolete()), 132 * 171 * 4);
         v.thumbs.clear();
         v.invalidate_content();
-        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert_eq!(upload_result(&mut v, &ctx, obsolete()), 0);
         assert!(v.thumbs.is_empty(), "nor after the content changed");
         let pool = RenderPool::new_inline(Arc::new(Vec::new()), Default::default());
         v.last_queue = vec![first];
         v.suspend_rendering(&pool);
-        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert_eq!(upload_result(&mut v, &ctx, obsolete()), 0);
         assert!(v.thumbs.is_empty(), "nor after the tab was suspended");
     }
 
@@ -5573,7 +5786,7 @@ trailer << /Root 1 0 R >>
         let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
         let req = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
         v.last_queue = vec![req];
-        v.receive_result(&ctx, solid_result(req, 10, 10));
+        upload_result(&mut v, &ctx, solid_result(req, 10, 10));
         v.frame_queue = vec![req];
         v.page_changed(0);
         assert_eq!(v.prepare_render_queue(&info, 1.0), vec![req]);
@@ -5615,7 +5828,7 @@ trailer << /Root 1 0 R >>
         assert_eq!(pages, (0..10).collect::<Vec<_>>(), "every on-screen page, and no prefetch past the allowance");
         v.last_queue = queue.clone();
         for req in &queue {
-            assert!(v.receive_result(&ctx, solid_result(*req, 2000, 2000)) > 0, "on-screen page {} uploaded", req.page);
+            assert!(upload_result(&mut v, &ctx, solid_result(*req, 2000, 2000)) > 0, "on-screen page {} uploaded", req.page);
         }
         assert_eq!(v.pages.len(), 10, "none evicted another on-screen page");
         // A 5K viewport needs more 1024-pixel tiles than the tile allowance holds.
@@ -5634,7 +5847,7 @@ trailer << /Root 1 0 R >>
         v.frame_visible = [0].into();
         v.frame_queue = vec![req(0)];
         v.last_queue = v.prepare_render_queue(&info, 1.0);
-        v.receive_result(&ctx, solid_result(req(0), 100, 130));
+        upload_result(&mut v, &ctx, solid_result(req(0), 100, 130));
         // Single-page view moves on to page 1: page 0 is no longer demanded.
         v.begin_render_frame();
         v.current = 1;
@@ -5668,7 +5881,7 @@ trailer << /Root 1 0 R >>
         assert_eq!(queue, vec![main], "visible pixels first: no thumbnails or text yet");
         // Once the visible raster arrives, background work is admitted.
         v.last_queue = queue;
-        assert!(v.receive_result(&ctx, solid_result(main, 100, 130)) > 0);
+        assert!(upload_result(&mut v, &ctx, solid_result(main, 100, 130)) > 0);
         v.begin_render_frame();
         v.frame_visible = [0].into();
         v.frame_queue = vec![text];
@@ -5725,7 +5938,7 @@ trailer << /Root 1 0 R >>
             let dimensions = (device_pixels(page.width, request.scale), device_pixels(page.height, request.scale));
             view.last_queue = vec![request];
             assert_eq!(
-                view.receive_result(&ctx, solid_result(request, dimensions.0, dimensions.1)),
+                upload_result(view, &ctx, solid_result(request, dimensions.0, dimensions.1)),
                 rgba_bytes(dimensions.0 as usize, dimensions.1 as usize)
             );
             assert_eq!(view.thumbs.get(&0).unwrap().tag, request.tag);
@@ -5785,13 +5998,13 @@ trailer << /Root 1 0 R >>
         let generation = doc.edit_generation();
         let mut v = DocView::new(id, &doc.info, ViewDefaults::default());
         v.comments.selected = Some((0, 0));
-        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0);
+        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0, false);
         assert!(v.signature_drag.contains(0, 0));
 
         v.suspend_rendering(&doc.renderer);
         assert!(!v.signature_drag.contains(0, 0), "inactive tabs release the preview pool and textures");
         assert_eq!(v.comments.selected, Some((0, 0)), "the user's selection survives suspension");
-        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0);
+        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0, false);
         assert!(v.signature_drag.contains(0, 0), "reactivating the view rebuilds the selected image's preview");
         assert!(Arc::ptr_eq(&bytes, &doc.bytes));
         assert_eq!(doc.edit_generation(), generation);
@@ -6110,7 +6323,8 @@ trailer << /Root 1 0 R >>
         let req = RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() };
         v.last_queue = vec![req];
         let ctx = egui::Context::default();
-        v.receive_result(
+        upload_result(
+            &mut v,
             &ctx,
             pdfcraft_render::RenderedPage {
                 request: req,

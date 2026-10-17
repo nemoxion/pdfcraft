@@ -419,8 +419,14 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
             let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+            let before = app.session.get(app.views[i].id).map(|doc| doc.edit_generation());
             if app.apply_edit(edit) {
                 ed.applied();
+                if let Some(before) = before
+                    && let Some(doc) = app.session.get(app.views[i].id)
+                {
+                    app.views[i].text_background.formatted(before, doc.edit_generation(), ed.page, ed.block);
+                }
                 if let Some(doc) = app.session.get(app.views[i].id)
                     && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
                 {
