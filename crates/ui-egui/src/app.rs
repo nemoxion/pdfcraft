@@ -107,6 +107,8 @@ impl PdfCraftApp {
             fill_text_color: [0.0; 3],
             dialog: None,
             updates: updates::Updates::default(),
+            speaker: None,
+            read_aloud: read_aloud::ReadAloud::default(),
             printer_source: None,
             options_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -333,6 +335,12 @@ impl PdfCraftApp {
         self.toast_script = None;
     }
 
+    /// Read Out Loud's rules come from the file at `path` (which may not exist yet), re-read
+    /// whenever it changes; without one they are the built-in defaults.
+    pub fn set_read_aloud_rules_path(&mut self, path: std::path::PathBuf) {
+        self.read_aloud.set_rules_path(path);
+    }
+
     /// Notify with a static message in the UI language.
     pub fn notify_tr(&mut self, text: &str) {
         self.notify(tl!(text).to_string());
@@ -521,6 +529,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_updates();
         self.poll_print();
+        self.read_aloud_poll();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);

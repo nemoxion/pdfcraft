@@ -40,6 +40,7 @@ mod motion;
 mod reopen;
 mod settings;
 mod single_instance;
+mod speech;
 mod text_scale;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
@@ -424,6 +425,10 @@ fn app_creator<'a>(
             app.motion.source = Some(motion::source());
         }
         app.set_startup_update_check(true);
+        app.speaker = Some(std::sync::Arc::new(speech::HttpSpeaker::default()));
+        if let Some(dir) = settings_dir() {
+            app.set_read_aloud_rules_path(dir.join(pdfcraft_ui_egui::read_aloud::RULES_FILE));
+        }
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]

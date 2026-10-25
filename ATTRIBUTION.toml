@@ -1216,6 +1216,39 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "fe3771fa2f0a9a3c7736164c9a855beefacc02548084ac1d6fc8da8a8a9180b0"
 
 [[asset]]
+path = "assets/icons/headphones.svg"
+title = "Lucide icon \"headphones\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/headphones.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "7719585dafa921805aefc21fc3262bbcc621507610a653b84e1632236650b35a"
+
+[[asset]]
+path = "assets/icons/pause.svg"
+title = "Lucide icon \"pause\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pause.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "f122ec4ea7f5693a0b1baafa9c708b53980dc87b4aacb297c6e6f71c1a4c115c"
+
+[[asset]]
+path = "assets/icons/play.svg"
+title = "Lucide icon \"play\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/play.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "d7c34786135922a92b6896f6c2384ceeb0346afbf6041dc79982011411409833"
+
+[[asset]]
 path = "assets/icons/hash.svg"
 title = "Lucide icon \"hash\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

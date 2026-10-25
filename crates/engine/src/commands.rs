@@ -222,6 +222,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // View ▸ Read Out Loud, with Acrobat's keys where egui passes them on: Ctrl+Shift+C and
+    // Ctrl+Shift+V (Acrobat's Pause and Read This Page Only) arrive as Copy and Paste instead.
+    c("view.read_aloud.activate", "Activate Read Out Loud", VIEW, Some(Shortcut::cmd_shift("Y")), Document, "headphones"),
+    c("view.read_aloud.page", "Read this page only", VIEW, None, Document, "headphones"),
+    c("view.read_aloud.to_end", "Read to end of document", VIEW, Some(Shortcut::cmd_shift("B")), Document, "headphones"),
+    c("view.read_aloud.pause", "Pause / resume reading", VIEW, None, Document, "pause"),
+    c("view.read_aloud.stop", "Stop reading", VIEW, Some(Shortcut::cmd_shift("E")), Document, "square"),
+    c("view.read_aloud.follow", "Follow the reading (scroll lock)", VIEW, None, Document, "lock"),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.

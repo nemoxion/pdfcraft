@@ -1,6 +1,6 @@
 # Hardware and platform parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Read Out Loud through a user-set speech server; earlier: web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Each hardware feature Acrobat Pro uses, per platform, ours against Acrobat's. Acrobat runs on macOS
 and Windows (plus a limited web viewer/editor in Document Cloud); PdfCraft runs on macOS, Windows,
@@ -23,7 +23,7 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 | Pen and touch | Touch mode, pen ink, Windows Ink | trackpad pinch zoom; ink from pointer, no pressure | ink from pointer, no pressure or touch mode | as macOS | pointer | touchpad scrolling 1:1 (#759, PR #868) |
 | Keyboard input methods (IME) | yes | yes; Japanese and Korean IME fixes patched into winit | yes (Microsoft Korean cursor fix) | X11 and Wayland IME fixes | browser | `vendor/README.md` winit patches 2–10 |
 | Screen readers | VoiceOver, NVDA, JAWS | AccessKit labels (partial) | AccessKit (partial) | AccessKit (partial) | partial | `a11y.app-screen-reader` partial |
-| Text to speech (Read Out Loud) | yes | none | none | none | none | `a11y.read-aloud` planned |
+| Text to speech (Read Out Loud) | yes | a speech server the user sets (no platform voices), played through CoreAudio | as macOS, through WASAPI | as macOS, through ALSA | none | `a11y.read-aloud` partial |
 | Apple Silicon / ARM64 | native | native | ARM64 build (#61) | ARM64 builds | n/a | `release.yml` |
 
 ## Platforms
@@ -45,3 +45,4 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 | 2026-10-10 | minor | Windows printing shipped (#756): the Windows row's gap is closed; the web row keeps "printing" |
 | 2026-10-11 | minor | Shared craft-print spooler; Windows preserves PDF sheet size/orientation and uses corrected duplex binding edges. Physical output remains a hardware check. |
 | 2026-10-11 | minor | The Printers row's Windows cell still said none: now the Windows spooler (#756, PR #847). Touchpad scrolling 1:1 (#759, PR #868) |
+| 2026-10-24 | minor | Text to speech: Read Out Loud reads through a speech server the user sets in Preferences and plays on the default output device; platform voices and the web build are still missing |
