@@ -440,6 +440,10 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
     }
 }
 
+/// What a page's Read Out Loud paragraphs were found with: the document's edit generation, the
+/// filters and the rules' generation.
+pub(crate) type ReadAloudKey = (u64, pdfcraft_engine::read_aloud::Filters, u64);
+
 pub struct DocView {
     pub id: DocId,
     pub zoom: f32,
@@ -549,7 +553,7 @@ pub struct DocView {
     /// Page heights in points (view space), for mapping text positions to scroll offsets.
     page_heights: Vec<f32>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
-    screen_rects: Vec<(usize, Rect)>,
+    pub(crate) screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
     /// The scroll viewport on screen last frame.
     viewport_screen: Rect,
@@ -586,6 +590,8 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Read Out Loud: the paragraphs per page, with the document generation they were read at.
+    pub(crate) read_aloud_passages: HashMap<usize, (ReadAloudKey, Vec<pdfcraft_engine::read_aloud::Passage>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -898,6 +904,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            read_aloud_passages: HashMap::new(),
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,
@@ -3260,6 +3267,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.current_scale_tag = tag;
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
+    // Read Out Loud: the paragraph being read is highlighted; the headphones tool reads from a
+    // clicked one (started once the pages are drawn).
+    let read_highlight = app.read_aloud.highlight(view.id);
+    let read_filters = app.read_aloud.prefs.filters;
+    let (read_rules, read_rules_generation) = (app.read_aloud.rules.rules(), app.read_aloud.rules.generation());
+    let mut read_from: Option<(usize, usize, usize)> = None;
     // Text selection runs for the Select tool and for the markup tools (highlight…).
     let selects_text = match tool {
         QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
@@ -3278,7 +3291,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::ReadAloud => false,
     };
     let prefs = &app.comment_prefs;
     let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
@@ -3786,7 +3800,32 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             {
                 view.links.context = Some((i, l.index));
             }
-            let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
+            let on_page = read_highlight.as_ref().filter(|(page, _, _)| *page == i);
+            let reading = on_page.map(|(_, boxes, _)| boxes.as_slice()).unwrap_or_default();
+            let reading_left = on_page.map(|(_, _, left)| *left);
+            let on_read_aloud = crate::read_aloud::page_input(
+                ui,
+                &resp,
+                &xf,
+                i,
+                info,
+                doc,
+                view,
+                tool == QuickTool::ReadAloud,
+                read_filters,
+                (&read_rules, read_rules_generation),
+                reading,
+                reading_left,
+                &mut read_from,
+            );
+            let consumed = on_objects
+                || on_edit_text
+                || on_link
+                || on_content
+                || boxing
+                || on_field
+                || on_read_aloud
+                || comments::page_input(ui, &resp, &pcx, view);
 
             let preview_target =
                 (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
@@ -4646,6 +4685,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(why) = refused {
         app.notify_error(why);
     }
+    if let Some((page, paragraph, offset)) = read_from {
+        app.read_aloud_start(page, Some((paragraph, offset)), crate::read_aloud::Scope::ToEnd);
+    }
+    // Read Out Loud's busy pointer until its first sentence plays (the server may be loading
+    // its model); set last, over the page's own pointers. The first sentence repaints.
+    if app.read_aloud.waiting() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Progress);
+    }
     if open_signature || open_initials {
         app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
         app.dialog = Some(crate::Dialog::Signature);
@@ -5292,6 +5339,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     if icons::button(ui, "hand", 32.0, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
                         app.quick_tool = QuickTool::Hand;
                     }
+                    crate::read_aloud::quick_buttons(app, ui);
                     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
                     // group selects its last-used tool; clicking it again opens the flyout.
                     for g in 0..comments::GROUPS.len() {

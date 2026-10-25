@@ -169,6 +169,16 @@ const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.d
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
 const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const READ_ALOUD: &[&str] = &[
+    "view.read_aloud.activate",
+    SEP,
+    "view.read_aloud.page",
+    "view.read_aloud.to_end",
+    "view.read_aloud.pause",
+    "view.read_aloud.stop",
+    SEP,
+    "view.read_aloud.follow",
+];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -345,6 +355,7 @@ impl PdfCraftApp {
         view.extend(list(PANE_COMMANDS, &mut used));
         view.push(Node::Separator);
         view.extend(list(MODES, &mut used));
+        view.push(Node::submenu(tl!("Read Out Loud"), list(READ_ALOUD, &mut used)));
         view.push(Node::submenu(tl!("Display theme"), list(THEMES, &mut used)));
         view.push(Node::Separator);
         view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used)));
