@@ -864,6 +864,28 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
+        t("read_aloud_passages", "List what Read Out Loud reads", "What View ▸ Read Out Loud reads, without the speech: the paragraphs in reading order (including text drawn by form XObjects) from paragraph (1-based, default 1) of page to the end of that page, or with to_end to the end of the document. Each has its page, paragraph, rect (top-left-origin points), text (whitespace runs as single spaces) and chunks, the sentence-sized pieces sent to the speech server one request each. At most limit paragraphs (default and maximum 500); next is where to continue, or null. Paragraphs are the page's reading blocks joined by whitespace: a run on the same row always joins, a row below joins unless its gap is clearly wider than the page's typical line spacing or it opens with a first-line indent or a bold label such as RQ1:. skip_page_numbers (default true) leaves out paragraphs that are only a page number; skip_headers (default true) leaves out running headers and footers; skip_bullets (default true) leaves out bullets and footnote symbols; skip_equations (default true) leaves out display equations and their numbers; skip_numbers (default true) leaves out number-only table cells; skip_citations (default true) removes citations in the style the page mostly uses, [13] or (Smith et al., 2020). Needs the copy permission, as copying text does.")
+            .ro()
+            .cmd("view.read_aloud.to_end")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "paragraph": { "type": "integer", "minimum": 1, "description": "Start at this paragraph of page (1-based). Default 1." },
+                    "to_end": { "type": "boolean", "description": "Read on to the end of the document. Default false: this page only." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "The most paragraphs listed. Default 500." },
+                    "skip_page_numbers": { "type": "boolean", "description": "Leave out paragraphs that are only a page number. Default true." },
+                    "rules": { "type": "string", "maxLength": 65536, "description": "Read Out Loud's text rules as TOML, as in the app's read-aloud-rules.toml: [paragraphs] gap, indent_min, indent_max; [figures] cell_gap, label_width, sparse_density, prose_density, margin, passed_rows; [headers] max_size, pages, min_letters; [words] captions, compound_ends, bold_fonts, italic_fonts. Unset rules keep their defaults; an unknown or out-of-range rule is an error." },
+                    "skip_headers": { "type": "boolean", "description": "Leave out running headers and footers: a page's top or bottom row that a page or two before or after repeats, page numbers aside, in type no larger than the body. Default true." },
+                    "skip_figures": { "type": "boolean", "description": "Leave out text inside figures and tables: labels, small-print fragments and table rows without sentence punctuation. Default true." },
+                    "skip_captions": { "type": "boolean", "description": "Leave out figure and table captions (\"Figure 3: …\", \"Table 2. …\"). Default false." },
+                    "skip_bullets": { "type": "boolean", "description": "Leave out bullets and footnote symbols, and a dash opening a paragraph. Default true." },
+                    "skip_equations": { "type": "boolean", "description": "Leave out display equations (paragraphs mostly in math fonts) and equation numbers. Default true." },
+                    "skip_numbers": { "type": "boolean", "description": "Leave out paragraphs of numbers without words (table cells). Default true." },
+                    "skip_citations": { "type": "boolean", "description": "Remove citations in the page's style, [13] or (Smith, 2020). Default true." },
+                }),
+                &["doc", "page"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(

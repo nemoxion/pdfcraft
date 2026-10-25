@@ -113,6 +113,7 @@ mod panels;
 mod pickers;
 pub mod prepare;
 mod print_ui;
+pub mod read_aloud;
 mod signature_drag;
 pub mod units;
 mod web_print;
@@ -262,6 +263,8 @@ pub enum QuickTool {
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
     /// Select tool does the same while Alt/Option is held at the start of a drag.
     ColumnSelect,
+    /// View ▸ Read Out Loud ▸ Activate (the headphones): click a paragraph to read from there.
+    ReadAloud,
 }
 
 /// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are
@@ -702,6 +705,9 @@ pub struct PdfCraftApp {
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
     pub(crate) updates: updates::Updates,
+    /// Turns text into speech for Read Out Loud (the desktop app sets it; see `read_aloud`).
+    pub speaker: Option<std::sync::Arc<dyn read_aloud::Speaker>>,
+    pub(crate) read_aloud: read_aloud::ReadAloud,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
     pub printer_source: Option<PrinterSource>,
@@ -1139,6 +1145,8 @@ impl PdfCraftApp {
             dialog: None,
             update_source: None,
             updates: updates::Updates::default(),
+            speaker: None,
+            read_aloud: read_aloud::ReadAloud::default(),
             printer_source: None,
             options_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -2341,6 +2349,12 @@ impl PdfCraftApp {
     }
 
     /// Notify with a static message in the UI language.
+    /// Read Out Loud's rules come from the file at `path` (which may not exist yet), re-read
+    /// whenever it changes; without one they are the built-in defaults.
+    pub fn set_read_aloud_rules_path(&mut self, path: std::path::PathBuf) {
+        self.read_aloud.set_rules_path(path);
+    }
+
     pub fn notify_tr(&mut self, text: &str) {
         self.notify(tl!(text).to_string());
     }
@@ -2686,6 +2700,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
+        v["read_aloud"] = self.read_aloud.prefs.to_json();
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
@@ -2791,6 +2806,7 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
+        self.read_aloud.prefs = read_aloud::Prefs::from_json(&v["read_aloud"]);
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -3150,6 +3166,7 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "read-aloud" => QuickTool::ReadAloud,
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;
@@ -3670,6 +3687,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_updates();
         self.poll_print();
+        self.read_aloud_poll();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);

@@ -549,6 +549,30 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.read_aloud.activate" => {
+                if self.quick_tool == crate::QuickTool::ReadAloud {
+                    self.read_aloud.stop();
+                    self.quick_tool = crate::QuickTool::Select;
+                } else {
+                    self.quick_tool = crate::QuickTool::ReadAloud;
+                    self.notify_tr("Click a sentence to read aloud from there.");
+                }
+            }
+            "view.read_aloud.page" | "view.read_aloud.to_end" => {
+                let scope = if id == "view.read_aloud.page" { crate::read_aloud::Scope::Page } else { crate::read_aloud::Scope::ToEnd };
+                if let Some(page) = active.and_then(|i| self.views.get(i)).map(|v| v.current) {
+                    self.read_aloud_start(page, None, scope);
+                }
+            }
+            "view.read_aloud.pause" => {
+                if !self.read_aloud.toggle_pause() {
+                    self.notify_tr("Nothing is being read aloud.");
+                }
+            }
+            "view.read_aloud.stop" => {
+                self.read_aloud.stop();
+            }
+            "view.read_aloud.follow" => self.read_aloud.toggle_follow(),
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;

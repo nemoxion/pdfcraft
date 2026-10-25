@@ -9175,3 +9175,70 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// `read_aloud_passages` lists what View ▸ Read Out Loud reads: one page or on to the end, from a
+/// paragraph, in pages of `limit` with `next` to continue; bad arguments are readable errors, and
+/// a document that forbids copying keeps its text in.
+#[test]
+fn read_aloud_passages_through_tools() {
+    let dir = workdir("read-aloud");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let texts = |v: &Value| v["passages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+
+    let page = ok(&mut a, "read_aloud_passages", json!({ "doc": doc, "page": 2, "skip_page_numbers": false, "skip_figures": false }));
+    assert_eq!(texts(&page), ["Page 2"]);
+    assert_eq!(page["passages"][0]["chunks"], json!(["Page 2"]));
+    assert_eq!(page["passages"][0]["page"], 2);
+    assert_eq!(page["next"], Value::Null);
+
+    let to_end =
+        ok(&mut a, "read_aloud_passages", json!({ "doc": doc, "page": 2, "to_end": true, "skip_page_numbers": false, "skip_figures": false }));
+    assert_eq!(texts(&to_end), ["Page 2", "Page 3"]);
+    let limited = ok(
+        &mut a,
+        "read_aloud_passages",
+        json!({ "doc": doc, "page": 1, "to_end": true, "limit": 2, "skip_page_numbers": false, "skip_figures": false }),
+    );
+    assert_eq!(texts(&limited), ["Page 1", "Page 2"]);
+    assert_eq!(limited["next"], json!({ "page": 3, "paragraph": 1 }));
+    let past = ok(&mut a, "read_aloud_passages", json!({ "doc": doc, "page": 1, "paragraph": 2, "skip_page_numbers": false, "skip_figures": false }));
+    assert_eq!(past["count"], 0, "page 1 has one paragraph: {past}");
+    // Rules as TOML, as in the app's rules file: the defaults written out read the same.
+    let ruled = ok(
+        &mut a,
+        "read_aloud_passages",
+        json!({ "doc": doc, "page": 2, "skip_page_numbers": false, "skip_figures": false, "rules": "[headers]\npages = 2\n[figures]\ncell_gap = 1.5" }),
+    );
+    assert_eq!(texts(&ruled), ["Page 2"]);
+
+    // By default a paragraph that is only a page label ("Page 2") is not read.
+    assert_eq!(ok(&mut a, "read_aloud_passages", json!({ "doc": doc, "page": 2 }))["count"], 0);
+
+    for (args, word) in [
+        (json!({ "doc": doc, "page": 1, "paragraph": 0 }), "paragraph"),
+        (json!({ "doc": doc, "page": 1, "paragraph": i64::MIN }), "paragraph"),
+        (json!({ "doc": doc, "page": 1, "limit": 501 }), "limit"),
+        (json!({ "doc": doc, "page": 4 }), "out of range"),
+        (json!({ "doc": doc, "page": 1, "rules": "[figures]\ncell_gap = -1" }), "figures.cell_gap"),
+        (json!({ "doc": doc, "page": 1, "rules": "[figures]\ncel_gap = 2" }), "not a rule"),
+    ] {
+        let e = a.call("read_aloud_passages", &args);
+        assert!(matches!(&e, Err(ToolError::InvalidArgs(m)) if m.contains(word)), "{args}: {e:?}");
+    }
+
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    std::fs::write(dir.join("no-copy.pdf"), pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let locked = ok(&mut a, "doc_open", json!({ "path": "no-copy.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("read_aloud_passages", &json!({ "doc": locked, "page": 1 }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("copying")), "{refused:?}");
+}
