@@ -115,6 +115,14 @@ incremental = false
 lto = "thin"
 codegen-units = 1
 
+# Local installs while iterating (cargo build --profile local): release speed without
+# whole-program LTO, so a change in one crate rebuilds that crate and relinks.
+[profile.local]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [patch.crates-io]
 hayro-interpret = { path = "vendor/hayro-interpret" }
