@@ -41,6 +41,11 @@ pub(crate) struct TextBackground {
     /// An applied paragraph's last look. The page raster still has the old text until the page
     /// is rendered again, so the textless page and this look stay up until then.
     settling: Option<EditorLook>,
+    /// The display colours the textless page is drawn in.
+    colors: Option<crate::page_colors::PageColors>,
+    /// The open paragraph was formatted and stays open: its textless page is still right, so it
+    /// outlasts the settling look.
+    formatted: bool,
 }
 
 /// A paragraph editor's text as last drawn: its laid-out rows, where they were on the page (in
@@ -56,6 +61,17 @@ struct EditorLook {
 }
 
 impl TextBackground {
+    /// Formatting only changes the paragraph left out of this preview, so its textless page
+    /// stays valid; any other edit still rebuilds it in `prepare`.
+    pub fn formatted(&mut self, before: u64, after: u64, page: usize, block: usize) {
+        if self.key == Some((before, page, TextTarget::Block(block))) {
+            self.key = Some((after, page, TextTarget::Block(block)));
+            self.draft_key = None;
+            self.draft_rect = None;
+            self.formatted = true;
+        }
+    }
+
     pub fn pending(&self) -> bool {
         self.renderer.is_some() && self.received != self.tag
     }
@@ -74,17 +90,23 @@ impl TextBackground {
                 && self.texture.is_some()
         });
         match look {
-            Some(look) => {
-                self.renderer = None;
-                self.settling = Some(look);
-            }
+            // The renderer stays: while the paragraph stays open (formatting it), its textless
+            // page is drawn again from it at another scale or in other display colours.
+            Some(look) => self.settling = Some(look),
             None => *self = Self::default(),
         }
     }
 
+    /// The page's raster arrived. An applied paragraph's settling look ends; its textless page
+    /// goes too unless the paragraph is still open after formatting, where it stays to avoid a
+    /// flash while the editor's text is drawn over it.
     pub fn page_received(&mut self, page: usize) {
         if self.settling.as_ref().is_some_and(|look| look.page == page) {
-            *self = Self::default();
+            if std::mem::take(&mut self.formatted) {
+                self.settling = None;
+            } else {
+                *self = Self::default();
+            }
         }
     }
 
@@ -95,7 +117,9 @@ impl TextBackground {
         editor: Option<&LineEditor>,
         draft: Option<&crate::content_ui::TextDraft>,
         scale: f32,
+        dark: Option<pdfcraft_render::DarkPages>,
     ) {
+        let colors = crate::page_colors::PageColors::for_reading(dark, doc.renderer.reading_colors());
         let key = editor
             .map(|ed| (doc.edit_generation(), ed.page, TextTarget::Block(ed.block)))
             .or_else(|| draft.and_then(|d| d.index.map(|index| (doc.edit_generation(), d.page, TextTarget::Added(index)))));
@@ -130,6 +154,12 @@ impl TextBackground {
         let max_side = ctx.input(|i| i.max_texture_side) as f32;
         let scale = scale.min(crate::canvas::TILE_THRESHOLD.min(max_side) / p.width.max(p.height).max(1.0));
         let tag = (scale * 1000.0) as u64;
+        if self.colors != Some(colors) {
+            // Other display colours: the textless page is drawn again in them.
+            self.colors = Some(colors);
+            self.tag = None;
+            self.received = None;
+        }
         if self.tag != Some(tag) {
             renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
             self.tag = Some(tag);
@@ -143,7 +173,7 @@ impl TextBackground {
             if out.request.tag == tag {
                 self.texture = Some(ctx.load_texture(
                     "text-editor-background",
-                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
+                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba, colors),
                     egui::TextureOptions::LINEAR,
                 ));
                 self.received = Some(tag);
@@ -189,7 +219,12 @@ impl TextBackground {
         // Font metrics can underestimate the actual glyph ink. Paint the complete textless
         // page so overhanging glyphs cannot remain outside the estimated source rectangle.
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-        if for_editor {
+        if for_editor && settled.is_some() {
+            // Just formatted, still open: the page raster is being drawn again, so the textless
+            // page stays under the editor (whose own text shows the paragraph) until it arrives,
+            // rather than a blank page flashing.
+            xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
+        } else if for_editor {
             // Its place under everything drawn on the page later; the editor fills it once the
             // paragraph changes (an unchanged paragraph looks as the page draws it).
             let mut mesh = egui::Mesh::with_texture(tex.id());
@@ -1502,8 +1537,12 @@ fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32, colors: crate::page_colors::PageColors) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
+    // In the page's display colours; the paragraph's own colours stay as they are.
+    for section in &mut job.sections {
+        section.format.color = colors.text(section.format.color);
+    }
     let centered = job.halign == egui::Align::Center;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -1572,7 +1611,7 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, colors: crate::page_colors::PageColors) -> Option<Edit> {
     // Clicks outside the document (the Format text panel) keep the paragraph open. Where the
     // click landed is `interact_pos`: `latest_pos` is gone on the frame a tap lifts.
     let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
@@ -1619,7 +1658,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let smallest =
         ed.source.as_ref().and_then(|(block, lines)| block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size as f32).reduce(f32::min));
     let font = editor_font(&ed.look, smallest.map_or(ed.size, |s| (s * scale * 0.5).clamp(1.0, 300.0).min(ed.size)));
-    let text_color = color32(ed.look.color);
+    let text_color = colors.text(color32(ed.look.color));
     let block = ed.block;
     let mut done = None;
     let mut reveal = false;
@@ -1649,7 +1688,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let measured = editor_galley(ui, ed, &ed.text, scale, width, colors);
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
             let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
@@ -1686,7 +1725,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width, colors);
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let output = egui::TextEdit::multiline(&mut ed.text)
@@ -1933,7 +1972,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut background = TextBackground::default();
         for _ in 0..100 {
-            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0, None);
             if background.ready(0, 0) {
                 break;
             }
@@ -1942,12 +1981,36 @@ mod tests {
         assert!(background.ready(0, 0));
         assert!(!background.pending());
         let texture = background.texture.as_ref().unwrap().id();
-        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0, None);
         assert_eq!(background.texture.as_ref().unwrap().id(), texture);
+        // Switching the display colours draws this full-page backdrop again, even at an unchanged
+        // scale, with the same renderer.
+        let requests = background.renderer.as_ref().unwrap().stats().render_requests;
+        for (offset, dark) in [true, false, true].into_iter().enumerate() {
+            for _ in 0..100 {
+                background.prepare(&ctx, doc, Some(&ed), None, 1.0, dark.then_some(crate::page_colors::FILTERING));
+                if !background.pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(background.ready(0, 0) && !background.pending());
+            let renderer = background.renderer.as_ref().unwrap();
+            assert_eq!(renderer.stats().render_requests, requests + offset as u64 + 1, "dark toggles reuse the existing renderer");
+            let pixels = crate::page_colors::uploaded_pixels(&ctx, background.texture.as_ref().unwrap());
+            let colors = crate::page_colors::PageColors::for_reading(dark.then_some(crate::page_colors::FILTERING), Default::default());
+            assert_eq!(pixels.first(), Some(&colors.paper()), "the editor's backdrop follows the page");
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let galley = editor_galley(ui, &ed, &ed.text, 1.0, 400.0, colors);
+                assert!(galley.job.sections.iter().all(|section| section.format.color == colors.text(Color32::BLACK)));
+            });
+            output.textures_delta.clear();
+            assert_eq!(ed.look.color, [0.0, 0.0, 0.0], "display colours never change the paragraph's style");
+        }
         assert_eq!(doc.bytes, source);
         assert_eq!(doc.edit_generation(), generation);
         assert!(!doc.dirty && doc.can_undo().is_none());
-        background.prepare(&ctx, doc, None, None, 1.0);
+        background.prepare(&ctx, doc, None, None, 1.0, None);
         assert!(background.texture.is_none() && background.renderer.is_none());
     }
 
@@ -1962,7 +2025,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput { max_texture_side: Some(16384), ..Default::default() });
         let mut background = TextBackground::default();
-        background.prepare(&ctx, doc, Some(&ed), None, 8.0);
+        background.prepare(&ctx, doc, Some(&ed), None, 8.0, None);
         let expected = 8.0f32.min(crate::canvas::TILE_THRESHOLD / page.width.max(page.height));
         assert!(expected > crate::canvas::BASE_SIDE / page.width.max(page.height), "the test page needs the larger side");
         assert_eq!(background.tag, Some((expected * 1000.0) as u64));
@@ -1970,7 +2033,7 @@ mod tests {
         ctx.end_pass().textures_delta.clear();
         ctx.begin_pass(egui::RawInput { max_texture_side: Some(2048), ..Default::default() });
         let mut small = TextBackground::default();
-        small.prepare(&ctx, doc, Some(&ed), None, 8.0);
+        small.prepare(&ctx, doc, Some(&ed), None, 8.0, None);
         assert_eq!(small.tag, Some(((2048.0 / page.width.max(page.height)) * 1000.0) as u64));
         ctx.end_pass().textures_delta.clear();
     }

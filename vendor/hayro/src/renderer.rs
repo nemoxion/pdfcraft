@@ -1083,8 +1083,9 @@ impl Renderer {
             return paint.clone();
         };
         // PdfCraft patch (17): annotations keep the colours they were given; reading colours
-        // replace document colours only (issue #1548).
-        if self.in_annotations {
+        // replace document colours only (issue #1548). PdfCraft patch (26): dark pages recolour
+        // annotations too, keeping their hues, as their filtering mode does.
+        if self.in_annotations && !replacement.keep_hue {
             return paint.clone();
         }
         match paint {
@@ -1683,6 +1684,14 @@ impl<'a> Device<'a> for Renderer {
                         let (sx, sy) = image.scale_factors();
                         transform *= Affine::scale_non_uniform(sx as f64, sy as f64);
                         self.ctx.set_transform(transform);
+                        // PdfCraft patch (26): dark pages recolour an image with transparency as
+                        // ink (an image signature, a logo); opaque images keep their colours.
+                        let image = match self.color_replacement {
+                            Some(replacement) if alpha.is_some() => {
+                                replacement.map_masked_image(image)
+                            }
+                            _ => image,
+                        };
                         self.draw_image(image, alpha);
                     },
                     Some((target_width, target_height)),

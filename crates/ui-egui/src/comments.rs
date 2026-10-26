@@ -1319,7 +1319,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 }
 
 /// Paint comment selection, hover and gesture previews on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, colors: crate::page_colors::PageColors) {
     let cv = &view.comments;
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
@@ -1351,15 +1351,15 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
             }
-            return paint_gesture(painter, cx, view);
+            return paint_gesture(painter, cx, view, colors);
         }
         if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
         {
-            return paint_gesture(painter, cx, view);
+            return paint_gesture(painter, cx, view, colors);
         }
         let shift = ui.input(|i| i.modifiers.shift);
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
-            return paint_points(painter, cx, view, a, pointer, shift);
+            return paint_points(painter, cx, view, a, pointer, shift, colors);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
@@ -1370,7 +1370,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
-    paint_gesture(painter, cx, view);
+    paint_gesture(painter, cx, view, colors);
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
@@ -1402,7 +1402,15 @@ fn changing_points(
     }
 }
 
-fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
+fn paint_points(
+    painter: &egui::Painter,
+    cx: &PageCx<'_>,
+    view: &DocView,
+    a: &Annotation,
+    pointer: Option<Pos2>,
+    shift: bool,
+    colors: crate::page_colors::PageColors,
+) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
@@ -1420,27 +1428,27 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
-    paint_gesture(painter, cx, view);
+    paint_gesture(painter, cx, view, colors);
 }
 
-fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, colors: crate::page_colors::PageColors) {
     let now = painter.ctx().input(|i| i.time);
     for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
-        paint_draw(painter, cx, &s.tool, &s.points);
+        paint_draw(painter, cx, &s.tool, &s.points, colors);
     }
     if let Some(Gesture::Draw { page, tool, points }) = &view.comments.gesture
         && *page == cx.page
     {
-        paint_draw(painter, cx, tool, points);
+        paint_draw(painter, cx, tool, points, colors);
     }
 }
 
 /// A drawing tool's shape from its points (a live drag, or a released one still settling).
-fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]]) {
+fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]], colors: crate::page_colors::PageColors) {
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
-        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
+        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), colors.line_art(color32(style.color)));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
             CommentTool::Ink => {
@@ -2649,6 +2657,62 @@ mod tests {
             assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
             assert!(icons::exists(t.icon()), "icon {}", t.icon());
             assert!(GROUPS[t.group()].contains(&t));
+        }
+    }
+
+    #[test]
+    fn dark_pages_live_ink_uses_display_colours_without_changing_annotation_style() {
+        use crate::page_colors::PageColors;
+        use pdfcraft_render::ReadingColors;
+        let mut app = crate::PdfCraftApp::new();
+        let bytes = app.session.create_blank(100.0, 50.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        let info = app.session.get(app.views[0].id).unwrap().info.clone();
+        let view = &mut app.views[0];
+        let points = vec![[10.0, 10.0], [20.0, 20.0]];
+        view.comments.gesture = Some(Gesture::Draw { page: 0, tool: CommentTool::Ink, points: points.clone() });
+        let mut prefs = CommentPrefs::default();
+        prefs.set_color(CommentTool::Ink, [0.0, 0.0, 0.0]);
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 50.0)), rot: 0, pw: 100.0, ph: 50.0 };
+        for tool in [CommentTool::Ink, CommentTool::Line, CommentTool::Arrow, CommentTool::Rectangle, CommentTool::Oval] {
+            prefs.set_color(tool, [0.0, 0.0, 0.0]);
+            view.comments.gesture = Some(Gesture::Draw { page: 0, tool, points: points.clone() });
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                info: &info,
+                tool: QuickTool::Comment(CommentTool::Ink),
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                ptr: &crate::page_pointer::PagePointer::default(),
+                redact_mark: ([0.0; 3], 1.0),
+            };
+            for (colors, expected) in [
+                (PageColors::Original, Color32::BLACK),
+                (PageColors::Dark(pdfcraft_render::DarkPalette::Soft), Color32::from_gray(230)),
+                (PageColors::for_reading(Some(Default::default()), ReadingColors::WHITE_ON_BLACK), Color32::WHITE),
+                (PageColors::for_reading(Some(Default::default()), ReadingColors::YELLOW_ON_BLACK), Color32::YELLOW),
+            ] {
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| paint_gesture(ui.painter(), &cx, view, colors));
+                let stroke = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                    egui::Shape::Rect(rect) => Some(rect.stroke.color),
+                    egui::Shape::Ellipse(ellipse) => Some(ellipse.stroke.color),
+                    egui::Shape::Path(path) => match &path.stroke.color {
+                        egui::epaint::ColorMode::Solid(color) => Some(*color),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                output.textures_delta.clear();
+                assert_eq!(stroke, Some(expected), "the actual preview stroke follows display colours");
+                let shape = drawn_shape(tool, &points).unwrap();
+                let Edit::AddAnnotation(annotation) = new_comment(&cx, tool, shape, String::new()) else { panic!("annotation edit") };
+                assert_eq!(annotation.style.color, [0.0, 0.0, 0.0], "stored ink stays black in every display mode");
+                assert_eq!(prefs.style(CommentTool::Ink).color, [0.0, 0.0, 0.0]);
+            }
         }
     }
 
