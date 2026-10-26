@@ -6840,6 +6840,37 @@ trailer << /Root 1 0 R >>
         assert_eq!((pixel(&all, 40, 50), pixel(&all, 140, 50)), ([0, 0, 0, 255], [0, 0, 0, 255]), "keeping all images keeps both");
     }
 
+    /// A Multiply highlight on dark pages. Multiply only darkens, so on the dark paper the
+    /// yellow band hardly showed and the light text under it turned the band's dark colour. Dark
+    /// pages exchange light and dark, so the highlight draws as Screen (vendored hayro patch
+    /// 27): the band lights the paper in a yellow tone and the text under it stays the ink.
+    #[test]
+    fn dark_pages_draw_a_multiply_highlight_as_a_light_band_under_light_text() {
+        // A black bar (the text) at 100..110 under a yellow highlight over 15..120.
+        let content = "0 g 100 40 10 20 re f";
+        let pdf = format!(
+            "%PDF-1.7\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Annots [5 0 R] >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /Annot /Subtype /Highlight /Rect [15 35 120 65] /QuadPoints [15 65 120 65 15 35 120 35] /C [1 1 0] >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let dark_reading = crate::DarkPages { palette: crate::DarkPalette::Black, images: crate::DarkImages::KeepOpaque }.reading_colors();
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig { dark_reading, ..Default::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let pixel = |x: u32, y: u32| -> [u8; 4] { page.rgba[((y * page.width + x) * 4) as usize..][..4].try_into().unwrap() };
+        assert_eq!(pixel(150, 50), [0, 0, 0, 255], "the black palette's paper outside the band");
+        let [r, g, b, _] = pixel(30, 50);
+        assert!(r > 40 && g > 40 && b + 30 < r.min(g), "the band lights the paper in yellow: {r} {g} {b}");
+        let [r, g, b, _] = pixel(105, 50);
+        assert!(r > 230 && g > 230 && b > 200, "the text under the band stays light: {r} {g} {b}");
+    }
+
     #[test]
     fn reading_colors_map_solid_paints_and_leave_images() {
         let content = "0 0 0 rg 10 10 30 20 re f\nq 20 0 0 10 60 20 cm /Im Do Q";

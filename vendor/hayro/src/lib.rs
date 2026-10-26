@@ -132,7 +132,7 @@ impl ColorReplacement {
     /// equal pixels is mapped once. Never panics.
     pub fn map_masked_image(&self, image: hayro_interpret::ImageData) -> hayro_interpret::ImageData {
         use hayro_interpret::{ImageData, RgbData};
-        if !(self.keep_hue && self.masked_images && self.line_art) {
+        if !self.maps_masked_images() {
             return image;
         }
         let mut last: Option<([u8; 3], [u8; 3])> = None;
@@ -160,6 +160,33 @@ impl ColorReplacement {
                 scale_factors: luma.scale_factors,
             }),
         }
+    }
+
+    /// PdfCraft patch (27): with `keep_hue`, a paint drawn with a darkening blend mode (a
+    /// Multiply highlight), which dark pages draw with the lightening one (Screen): what it
+    /// took away from white paper, in its own hue, softened, to add to the dark paper. A yellow
+    /// highlight lights the paper dark yellow; [`Self::map`] would make its light yellow almost
+    /// the paper and the band would vanish. White adds nothing and black a grey; alpha is
+    /// copied. Under the line-art gate as `map`; text keeps `map`'s ink. Never panics.
+    pub fn map_lightening(&self, rgba8: [u8; 4]) -> [u8; 4] {
+        // How strongly the band shows: a full yellow lights black paper to 40% yellow, dark
+        // enough that light text over it keeps its contrast.
+        const STRENGTH: f32 = 0.4;
+        if !self.line_art {
+            return rgba8;
+        }
+        let [r, g, b, a] = rgba8;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        // The colour above its grey (its hue and saturation), plus what its grey darkened.
+        let grey = f32::from(255 - max);
+        let channel = |v: u8| ((f32::from(v - min) + grey) * STRENGTH).round().clamp(0.0, 255.0) as u8;
+        [channel(r), channel(g), channel(b), a]
+    }
+
+    /// PdfCraft patch (26): whether [`Self::map_masked_image`] maps an image's colours.
+    pub fn maps_masked_images(&self) -> bool {
+        self.keep_hue && self.masked_images && self.line_art
     }
 
     /// The reading-colours mapping by luminance alone.
@@ -548,6 +575,18 @@ mod dark_mapping_tests {
         assert!(r.abs_diff(g) < 30 && g.abs_diff(b) < 30, "by luminance it turns grey: {r} {g} {b}");
         let no_line_art = ColorReplacement { line_art: false, ..keep };
         assert_eq!(no_line_art.map([220, 30, 40, 255], false), [220, 30, 40, 255], "the line-art gate holds");
+    }
+
+    #[test]
+    fn darkening_paints_lighten_the_paper_in_their_own_hue() {
+        let keep = dark(true);
+        assert_eq!(keep.map_lightening([255, 255, 255, 255]), [0, 0, 0, 255], "white takes nothing away");
+        assert_eq!(keep.map_lightening([0, 0, 0, 128]), [102, 102, 102, 128], "black a grey; alpha copied");
+        assert_eq!(keep.map_lightening([255, 255, 0, 255]), [102, 102, 0, 255], "yellow stays yellow");
+        let [r, g, b, _] = keep.map_lightening([255, 200, 200, 255]);
+        assert!(r > g && g == b && r < 40, "a pale pink is a faint red: {r} {g} {b}");
+        let no_line_art = ColorReplacement { line_art: false, ..keep };
+        assert_eq!(no_line_art.map_lightening([255, 255, 0, 255]), [255, 255, 0, 255], "the line-art gate holds");
     }
 
     #[test]

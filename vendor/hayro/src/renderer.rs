@@ -464,6 +464,9 @@ pub(crate) struct Renderer {
     pub(crate) preview: bool,
     // TODO: Remove this once vello_cpu bug with non-transparent images is fixed
     image_transparency_stack: Vec<bool>,
+    /// PdfCraft patch (27): the blend mode the content set (`Device::set_blend_mode`), before
+    /// [`Renderer::blend_for`] picks what is drawn with.
+    blend: BlendMode,
 }
 
 #[derive(Clone, Copy)]
@@ -477,6 +480,38 @@ impl Renderer {
     /// PdfCraft patch (22): whether the innermost transparency group is a knockout group.
     fn in_knockout(&self) -> bool {
         self.knockout.last().copied().unwrap_or(false)
+    }
+
+    /// PdfCraft patch (27): dark pages exchange light and dark, so a blend mode that darkens
+    /// draws as the one that lightens: a Multiply highlight becomes Screen, and lights the dark
+    /// paper in its colour while the light text under it stays light, as inverting the light
+    /// page would show it. As Multiply, it darkened the text into the band and hardly marked
+    /// the paper. Only with `keep_hue`; reading colours keep the content's modes.
+    fn dark_blend(&self, blend_mode: BlendMode) -> BlendMode {
+        if !self.color_replacement.is_some_and(|r| r.keep_hue) {
+            return blend_mode;
+        }
+        match blend_mode {
+            BlendMode::Multiply => BlendMode::Screen,
+            BlendMode::Screen => BlendMode::Multiply,
+            BlendMode::Darken => BlendMode::Lighten,
+            BlendMode::Lighten => BlendMode::Darken,
+            BlendMode::ColorBurn => BlendMode::ColorDodge,
+            BlendMode::ColorDodge => BlendMode::ColorBurn,
+            other => other,
+        }
+    }
+
+    /// PdfCraft patch (27): draws the next paint with the content's blend mode, exchanged by
+    /// [`Self::dark_blend`] when the paint's colours are mapped (`mapped`); a paint that keeps
+    /// its colours (an opaque image, a shading) keeps its mode, or a Multiply photo would
+    /// wash out. A knockout group keeps its own mode, and without dark pages nothing changes.
+    fn blend_for(&mut self, mapped: bool) {
+        if self.in_knockout() || !self.color_replacement.is_some_and(|r| r.keep_hue) {
+            return;
+        }
+        let mode = if mapped { self.dark_blend(self.blend) } else { self.blend };
+        self.ctx.set_blend_mode(convert_blend_mode(mode));
     }
 
     pub(crate) fn new(
@@ -502,6 +537,7 @@ impl Renderer {
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
+            blend: BlendMode::Normal,
         }
     }
 
@@ -606,6 +642,7 @@ impl Renderer {
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
+                blend: BlendMode::Normal,
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1088,9 +1125,17 @@ impl Renderer {
         if self.in_annotations && !replacement.keep_hue {
             return paint.clone();
         }
+        // PdfCraft patch (27): text keeps its ink under a lightening mode (the ink stays light);
+        // other paint under it adds its hue to the paper (`map_lightening`).
+        let lightening = replacement.keep_hue && !is_text && darkens(self.blend);
         match paint {
             Paint::Color(c) => {
-                let mapped = replacement.map(c.to_rgba().to_rgba8(), is_text);
+                let rgba8 = c.to_rgba().to_rgba8();
+                let mapped = if lightening {
+                    replacement.map_lightening(rgba8)
+                } else {
+                    replacement.map(rgba8, is_text)
+                };
                 let rgba = hayro_interpret::color::AlphaColor::from_rgba8(
                     mapped[0], mapped[1], mapped[2], mapped[3],
                 );
@@ -1116,6 +1161,9 @@ impl Renderer {
                 _ => None,
             });
         }
+        // PdfCraft patch (27): a solid colour is mapped (or left alone without dark pages, where
+        // the exchange doesn't apply); a pattern keeps its colours.
+        self.blend_for(matches!(paint, Paint::Color(_)));
         let mut paint_transform = Affine::IDENTITY;
         let mut clip_path = None;
         // PdfCraft patch (19): `Extend::Repeat` tiles the texture over the path; a mesh texture
@@ -1275,6 +1323,7 @@ impl Renderer {
                                 scaler: self.scaler,
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
+                                blend: BlendMode::Normal,
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
@@ -1337,6 +1386,7 @@ impl Renderer {
                             scaler: self.scaler,
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
+                            blend: BlendMode::Normal,
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
@@ -1549,6 +1599,8 @@ impl<'a> Device<'a> for Renderer {
                         // every other solid fill; baked in raw, its ink would stay at its
                         // original colour and vanish into a mapped background.
                         let paint = &self.replaced(paint, false);
+                        // PdfCraft patch (27): see `set_paint`.
+                        self.blend_for(matches!(paint, Paint::Color(_)));
                         match paint {
                             Paint::Color(c) => {
                                 let color = c.to_rgba().to_rgba8();
@@ -1635,6 +1687,7 @@ impl<'a> Device<'a> for Renderer {
                                         scaler: self.scaler,
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
+                                        blend: BlendMode::Normal,
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -1686,12 +1739,16 @@ impl<'a> Device<'a> for Renderer {
                         self.ctx.set_transform(transform);
                         // PdfCraft patch (26): dark pages recolour an image with transparency as
                         // ink (an image signature, a logo); opaque images keep their colours.
+                        let mapped = alpha.is_some()
+                            && self.color_replacement.is_some_and(|r| r.maps_masked_images());
                         let image = match self.color_replacement {
                             Some(replacement) if alpha.is_some() => {
                                 replacement.map_masked_image(image)
                             }
                             _ => image,
                         };
+                        // PdfCraft patch (27): an image keeping its colours keeps its mode.
+                        self.blend_for(mapped);
                         self.draw_image(image, alpha);
                     },
                     Some((target_width, target_height)),
@@ -1725,9 +1782,11 @@ impl<'a> Device<'a> for Renderer {
                 .last()
                 .copied()
                 .unwrap_or(false);
+        // PdfCraft patch (27): a group's content is mostly mapped paint, so the group blends as
+        // dark pages exchange it.
         self.ctx.push_layer(
             None,
-            Some(convert_blend_mode(blend_mode)),
+            Some(convert_blend_mode(self.dark_blend(blend_mode))),
             Some(opacity),
             // TODO: Deduplicate
             mask.map(|m| {
@@ -1934,11 +1993,13 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        // PdfCraft patch (27): kept for `blend_for`.
+        self.blend = blend_mode;
         // PdfCraft patch (22): inside a knockout group every element replaces what it covers.
         let mode = if self.in_knockout() {
             knockout_blend_mode()
         } else {
-            convert_blend_mode(blend_mode)
+            convert_blend_mode(self.dark_blend(blend_mode))
         };
         self.ctx.set_blend_mode(mode);
     }
@@ -2035,6 +2096,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
+        blend: BlendMode::Normal,
     };
 
     let bg_color = mask.background_color().to_rgba();
@@ -2119,6 +2181,12 @@ fn convert_fill_rule(fill_rule: FillRule) -> Fill {
         FillRule::NonZero => Fill::NonZero,
         FillRule::EvenOdd => Fill::EvenOdd,
     }
+}
+
+/// PdfCraft patch (27): a blend mode that only darkens what is under it, which dark pages draw
+/// with its lightening counterpart (`Renderer::dark_blend`).
+fn darkens(blend_mode: BlendMode) -> bool {
+    matches!(blend_mode, BlendMode::Multiply | BlendMode::Darken | BlendMode::ColorBurn)
 }
 
 /// PdfCraft patch (22): how an element of a knockout group is drawn (see `set_knockout`).

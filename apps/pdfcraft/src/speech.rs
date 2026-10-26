@@ -246,7 +246,6 @@ fn to_sample(s: f32) -> rodio::Sample {
     rodio::Sample::from(s)
 }
 
-
 /// The certificate authorities the operating system trusts.
 fn os_roots() -> Result<ureq::tls::RootCerts, String> {
     let found = rustls_native_certs::load_native_certs();
