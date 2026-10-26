@@ -8719,3 +8719,96 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
 }
+/// View ▸ Read Out Loud reads a page's paragraphs in order, including text a form XObject draws
+/// (which Edit text doesn't offer), and a page without text has nothing to read.
+#[test]
+fn read_aloud_passages_are_the_reading_paragraphs_including_forms() {
+    let pdf = b"%PDF-1.4
+1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj
+2 0 obj <</Type/Pages/Kids[3 0 R 8 0 R]/Count 2>> endobj
+3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>/XObject<</Fm1 7 0 R>>>>/Contents 5 0 R>> endobj
+4 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>> endobj
+5 0 obj <</Length 80>> stream
+BT /F1 18 Tf 72 760 Td (First paragraph.) Tj ET
+q 1 0 0 1 0 0 cm /Fm1 Do Q
+endstream endobj
+7 0 obj <</Type/XObject/Subtype/Form/BBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>>>/Length 60>> stream
+BT /F1 12 Tf 72 400 Td (Drawn by a form.) Tj ET
+endstream endobj
+8 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>> endobj
+trailer <</Root 1 0 R>>
+%%EOF
+";
+    let mut s = Session::new();
+    let id = s.open("read.pdf", None, Arc::new(pdf.to_vec()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let passages = d.read_aloud_passages(0, crate::read_aloud::Filters::default());
+    let texts: Vec<&str> = passages.iter().map(|p| p.text.as_str()).collect();
+    assert_eq!(texts, ["First paragraph.", "Drawn by a form."]);
+    assert!(passages.iter().all(|p| p.page == 0 && p.rect[2] > p.rect[0] && p.rect[3] > p.rect[1]));
+    assert!(passages[0].rect[1] > passages[1].rect[3], "the first paragraph is above the second");
+    assert!(d.read_aloud_passages(1, crate::read_aloud::Filters::default()).is_empty(), "a page without text");
+    assert!(d.read_aloud_passages(7, crate::read_aloud::Filters::default()).is_empty(), "a page past the end");
+}
+
+/// Read Out Loud leaves out a running header and footer, the rows a page or two before or after
+/// repeats at the top or bottom whatever the page number, but not a title in large type that a
+/// later page's header repeats.
+#[test]
+fn read_aloud_skips_running_headers_and_footers() {
+    let body = "This body paragraph has enough words to set the size most of the page is set in.";
+    let page = |n: usize| {
+        let top = if n == 1 {
+            "BT /F1 18 Tf 72 760 Td (A Running Title) Tj ET".to_string()
+        } else {
+            format!("BT /F1 8 Tf 72 780 Td ({n}) Tj 40 0 Td (A Running Title) Tj ET")
+        };
+        format!("{top}\nBT /F1 10 Tf 72 700 Td ({body}) Tj ET\nBT /F1 8 Tf 72 40 Td (Journal of Tests, page {n}) Tj ET\n")
+    };
+    let mut pdf = String::from(
+        "%PDF-1.4
+1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj
+2 0 obj <</Type/Pages/Kids[3 0 R 4 0 R 5 0 R]/Count 3>> endobj
+6 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>> endobj
+",
+    );
+    for n in 1..=3 {
+        let content = page(n);
+        pdf.push_str(&format!(
+            "{} 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 6 0 R>>>>/Contents {} 0 R>> endobj\n{} 0 obj <</Length {}>> stream\n{content}endstream endobj\n",
+            n + 2,
+            n + 6,
+            n + 6,
+            content.len()
+        ));
+    }
+    pdf.push_str("trailer <</Root 1 0 R>>\n%%EOF\n");
+    let mut s = Session::new();
+    let id = s.open("running.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let texts = |page: usize, headers: bool| -> Vec<String> {
+        let filters = crate::read_aloud::Filters { headers, page_numbers: false, figures: false, ..crate::read_aloud::Filters::default() };
+        d.read_aloud_passages(page, filters).into_iter().map(|p| p.text).collect()
+    };
+    assert_eq!(texts(0, true), ["A Running Title", body], "the title stays, the footer goes");
+    assert_eq!(texts(1, true), [body]);
+    assert_eq!(texts(2, true), [body]);
+    assert_eq!(texts(1, false), ["A Running Title", body, "Journal of Tests, page 2"]);
+    // Pages of nothing but a repeated row keep it.
+    let pdf = b"%PDF-1.4
+1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj
+2 0 obj <</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>> endobj
+3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 6 0 R>>>>/Contents 7 0 R>> endobj
+4 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 6 0 R>>>>/Contents 7 0 R>> endobj
+6 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>> endobj
+7 0 obj <</Length 42>> stream
+BT /F1 10 Tf 72 700 Td (Same words) Tj ET
+endstream endobj
+trailer <</Root 1 0 R>>
+%%EOF
+";
+    let id = s.open("only.pdf", None, Arc::new(pdf.to_vec()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let filters = crate::read_aloud::Filters { figures: false, ..crate::read_aloud::Filters::default() };
+    assert_eq!(d.read_aloud_passages(1, filters).len(), 1);
+}

@@ -9153,11 +9153,11 @@ title = "Read out loud (platform TTS)"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["view.read_aloud.activate", "view.read_aloud.page", "view.read_aloud.to_end", "view.read_aloud.pause", "view.read_aloud.stop", "view.read_aloud.follow"]
+tools = ["read_aloud_passages"]
+evidence = ["crates/engine/src/tests.rs::read_aloud_passages_are_the_reading_paragraphs_including_forms", "crates/engine/src/read_aloud.rs::chunks_join_short_sentences_and_keep_every_word", "crates/automation/tests/it/automation.rs::read_aloud_passages_through_tools", "crates/ui-egui/src/read_aloud.rs::the_threads_speak_every_paragraph_in_order_then_finish", "crates/engine/src/read_aloud/english.rs::numbers_become_words", "crates/engine/src/read_aloud.rs::the_sentence_under_the_pointer_is_found_from_the_rows", "crates/ui-egui/src/read_aloud.rs::a_sentence_broken_by_a_page_break_is_read_whole", "apps/pdfcraft/src/speech.rs::pcm16_mono_decodes_to_samples", "crates/engine/src/tests.rs::read_aloud_skips_running_headers_and_footers", "crates/ui-egui/src/read_aloud.rs::the_rules_file_is_followed"]
+notes = "Headphones quick tool: click a sentence to read from there to the end; the paragraph read is outlined and followed across pages (scroll-lock button); running headers and footers (rows a neighbouring page repeats) are skipped (option); the thresholds for paragraphs, tables, figures and headers, and extra caption words, compounds and font names, come from read-aloud-rules.toml in the settings folder (Preferences creates it; edits apply within a second) or the tool's rules argument; English text speaks numbers, ranges, abbreviations and short acronyms as words; Read This Page Only / To End / Pause / Stop. Speech comes from a user-configured HTTP server (OpenAI-style /v1/audio/speech returning WAV), not the platform's TTS; the desktop app plays it through rodio. Missing: platform voices (no server needed), word-level highlight, reading form fields and alt text, Acrobat's Reading preferences (reading order override, pages-at-a-time), and the web build. Ctrl+Shift+C / Ctrl+Shift+V aren't bound: egui turns them into Copy / Paste."
 
 [[feature]]
 id = "a11y.read-aloud-options"
@@ -9165,11 +9165,11 @@ title = "Read-aloud voice, pitch and speed"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["app.preferences"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/read_aloud.rs::prefs_round_trip_and_reject_bad_settings"]
+notes = "Preferences ▸ Read Out Loud: speech server, voice id and language. Missing: pitch, speed, a voice list from the server, and a headless tool for the settings."
 
 [[feature]]
 id = "a11y.replace-page-colors"

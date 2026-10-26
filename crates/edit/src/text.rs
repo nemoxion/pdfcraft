@@ -2758,6 +2758,15 @@ pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBloc
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
 }
 
+/// [`reading_blocks`] together with the lines grouped into them, so a block's `rows` give where
+/// each of its rows lies. A block that pages of contents entries regroup may index lines of its
+/// own: check an index against the block's box before trusting it.
+pub fn reading_blocks_and_lines(doc: &Document, page: usize) -> Result<(Vec<TextBlock>, Vec<TextLine>), EditError> {
+    let (lines, _) = reading_lines(doc, page)?;
+    let blocks = regions::group_reading_blocks(&lines);
+    Ok((blocks, lines))
+}
+
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.
 // Keep other whitespace normalization unchanged.
 fn paragraph_separator(c: char) -> bool {

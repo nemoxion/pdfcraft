@@ -9,8 +9,16 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-# Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
-# trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
+# View ▸ Read Out Loud talks to the user's speech server over HTTPS (src/speech.rs): rustls
+# with the OS's trusted roots. No bundled root list (webpki-roots and webpki-root-certs are
+# CDLA-licensed).
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+# View ▸ Read Out Loud plays the speech server's WAV answer on the default output device
+# (src/speech.rs). Playback only: the WAV is decoded there, so no decoder features.
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
+# The speech server's timed answer carries its WAV in base64.
+base64 = "0.22"
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
