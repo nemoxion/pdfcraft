@@ -144,6 +144,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
+        v["read_aloud"] = self.read_aloud.prefs.to_json();
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
@@ -262,6 +263,7 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
+        self.read_aloud.prefs = read_aloud::Prefs::from_json(&v["read_aloud"]);
         if let Ok(color) = serde_json::from_value::<[f64; 3]>(v["fill_text_color"].clone())
             && let Some(color) = fill_sign::valid_text_color(color)
         {

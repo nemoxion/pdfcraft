@@ -150,7 +150,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 35] = [
+const PAGE_MODULES: [&str; 36] = [
     "canvas.rs",
     "canvas/area.rs",
     "canvas/bars.rs",
@@ -186,6 +186,7 @@ const PAGE_MODULES: [&str; 35] = [
     "canvas/image_pick.rs",
     "canvas/signature_drag.rs",
     "tools/calc_order_ui.rs",
+    "read_aloud.rs",
 ];
 
 /// egui's raw pointer state: where the pointer is, and which buttons are down or went down.
@@ -251,10 +252,11 @@ fn declares(line: &str) -> Option<&str> {
 const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
 
 /// Functions in the page modules that set a cursor other than the pages': (file, function, why).
-const NOT_PAGE_CURSOR: [(&str, &str, &str); 3] = [
+const NOT_PAGE_CURSOR: [(&str, &str, &str); 4] = [
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page, drawn after the pages' cursor is set"),
     ("tools/calc_order_ui.rs", "panel", "the Calculation order panel, whose rows are dragged to reorder them"),
+    ("canvas.rs", "apply_frame_requests", "Read Out Loud's busy pointer, over the whole view and its pages' cursor, until speech starts"),
 ];
 
 /// Whether `line` uses `name`, and not a longer name that ends in it (a field, after its `.`, is

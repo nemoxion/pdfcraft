@@ -157,6 +157,7 @@ mod tests {
             QuickTool::MarqueeZoom,
             QuickTool::Snapshot,
             QuickTool::ColumnSelect,
+            QuickTool::ReadAloud,
         ];
         for tool in &tools {
             match tool {
@@ -177,7 +178,8 @@ mod tests {
                 | QuickTool::SignArea { .. }
                 | QuickTool::MarqueeZoom
                 | QuickTool::Snapshot
-                | QuickTool::ColumnSelect => {}
+                | QuickTool::ColumnSelect
+                | QuickTool::ReadAloud => {}
             }
         }
         tools

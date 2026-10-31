@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (289)
+## In this repository (292)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -120,6 +120,9 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/globe.svg` | Lucide icon "globe" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/globe.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/grid-3x3.svg` | Lucide icon "grid-3x3" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/grid-3x3.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/hand.svg` | Lucide icon "hand" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/hand.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/headphones.svg` | Lucide icon "headphones" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/headphones.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/pause.svg` | Lucide icon "pause" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pause.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/play.svg` | Lucide icon "play" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/play.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/hash.svg` | Lucide icon "hash" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/hash.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/heading.svg` | Lucide icon "heading" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/heading.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/highlighter.svg` | Lucide icon "highlighter" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/highlighter.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |

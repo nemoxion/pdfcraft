@@ -73,6 +73,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+pub mod read_aloud;
 mod state;
 mod tools;
 mod workflows;
@@ -320,6 +321,9 @@ pub struct PdfCraftApp {
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
+    /// Turns text into speech for Read Out Loud (the desktop app sets it; see `read_aloud`).
+    pub speaker: Option<std::sync::Arc<dyn read_aloud::Speaker>>,
+    pub(crate) read_aloud: read_aloud::ReadAloud,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
     pub printer_source: Option<PrinterSource>,
