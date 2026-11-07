@@ -3390,7 +3390,7 @@ sha256 = "bedf1b23707b9e34157440e83f65464ff314fa9f6b1d39c7a8930d1645c2f8be"
 
 [[fetched]]
 file = "text-detection.onnx"
-url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx"
+url = "https://huggingface.co/robertknight/ocrs/resolve/main/text-detection-ssfbcj81.onnx"
 title = "Ocrs text detection model"
 author = "Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0)"
 source = "https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0)"
@@ -3399,11 +3399,11 @@ licence_url = "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt"
 licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
 kind = "model"
 usage = "Scan & OCR: finds words on page images (cargo xtask models)"
-sha256 = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe"
+sha256 = "c15df092060abe9417929b04eaf552b98946e15144036b3c83b09a3bf4d5d5a7"
 
 [[fetched]]
 file = "text-recognition.onnx"
-url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx"
+url = "https://huggingface.co/robertknight/ocrs/resolve/main/text-rec-checkpoint-s52qdbqt.onnx"
 title = "Ocrs text recognition model"
 author = "Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0)"
 source = "https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0)"
@@ -3412,7 +3412,7 @@ licence_url = "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt"
 licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
 kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
-sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
+sha256 = "3774cdfe8ba082a17c181d5ab0698f3ff2fd0def07cd2b9134faec9b1a191919"
 
 [[build_input]]
 name = "craft-fonts"
